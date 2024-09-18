@@ -10,7 +10,9 @@ from arcgis.features import GeoAccessor
 from arcgis.geometry import Point, Polyline
 import pandas as pd
 
+from .utils.dt import hh_mm_to_timedelta
 from .utils.exceptions import MissingRequiredColumnError
+from .utils.gtfs import interpolate_stop_times
 from .utils.pandas import replace_zero_and_space_strings_with_nulls
 
 __all__ = [
@@ -73,19 +75,11 @@ class GtfsFile(object):
     @cached_property
     def file_columns(self) -> List[str]:
         """List of column names observed in the source file."""
-        # open the file path to access the file
-        with open(self.file_path) as csv_file:
-            # user a sniffer to get properties
-            dialect = csv.Sniffer().sniff(csv_file.read(1024))
+        # only read the first five columns to sniff the data
+        df = pd.read_csv(self.file_path, header=0, nrows=5)
 
-            # reset pointer to first line
-            csv_file.seek(0)
-
-            # read the csv file using the sniffed dialect
-            csv_reader = csv.reader(csv_file, dialect=dialect)
-
-            # read the first line with the column headers
-            columns = next(csv_reader)
+        # get the columns
+        columns = df.columns.tolist()
 
         return columns
 
@@ -132,7 +126,7 @@ class GtfsFile(object):
                 dtype[col] = str
 
             elif col in self.integer_columns or col in self.boolean_columns:
-                dtype[col] = int
+                dtype[col] = "Int64"
 
             elif col in self.float_columns:
                 dtype[col] = float
@@ -384,13 +378,12 @@ class GtfsStopTimes(GtfsFile):
     required_columns = [
         "trip_id",
         "arrival_time",
-        "departure_date",
+        "departure_time",
         "stop_id",
         "stop_sequence",
     ]
-    string_columns = ["trip_id", "stop_id"]
+    string_columns = ["trip_id", "stop_id", "arrival_time", "departure_time"]
     integer_columns = ["stop_sequence"]
-    datetime_columns = ["arrival_time", "departure_time"]
 
     def __init__(
         self,
@@ -406,6 +399,23 @@ class GtfsStopTimes(GtfsFile):
         """
         super().__init__(file_path, all_columns)
         self.infer_missing = infer_missing
+
+    @cached_property
+    def data(self) -> pd.DataFrame:
+        """Pandas data frame of the file data."""
+
+        # get the data frame
+        df = self._read_file(self.all_columns)
+
+        # cast arrival and departure times to timedelta objects
+        for col in ["arrival_time", "departure_time"]:
+            df[col] = df[col].apply(lambda val: hh_mm_to_timedelta(val))
+
+        # interpolate any missing stop times if desired
+        if self.infer_missing:
+            df = interpolate_stop_times(df)
+
+        return df
 
 
 class GtfsTrips(GtfsFile):
@@ -440,8 +450,14 @@ class GtfsDataset(object):
             infer_stop_times: Whether to infer stop times, missing arrival and departure times.
             infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
         """
+        # ensure the directory is a path
+        if isinstance(gtfs_folder, str):
+            gtfs_folder = Path(gtfs_folder)
+
+        # save parameters as properties
         self.gtfs_folder = gtfs_folder
         self.infer_stop_times = infer_stop_times
+        self.infer_calendar = infer_calendar
 
         # paths to child resources
         self._agency_pth = self.gtfs_folder / "agency.txt"
@@ -465,11 +481,17 @@ class GtfsDataset(object):
         if self._calendar_pth.exists():
             calendar = GtfsCalendar(self._calendar_pth)
 
-        # if calendar.txt does not exist, infer from calendar-dates.txt
-        else:
+        # if calendar.txt does not exist, infer from calendar-dates.txt if desired
+        elif self.infer_calendar:
             raise NotImplementedError(
                 "calendar.txt not found, and inferencing from calendar-dates.txt has not yet been implemented."
             )
+
+        else:
+            raise FileNotFoundError(
+                "calendar.txt file does not appear to be included in this GTFS dataset."
+            )
+
         return calendar
 
     @cached_property
