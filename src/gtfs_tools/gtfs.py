@@ -1,4 +1,3 @@
-import csv
 import logging
 import tempfile
 import zipfile
@@ -12,7 +11,7 @@ import pandas as pd
 
 from .utils.dt import hh_mm_to_timedelta
 from .utils.exceptions import MissingRequiredColumnError
-from .utils.gtfs import interpolate_stop_times
+from .utils.gtfs import get_calendar_from_calendar_dates, interpolate_stop_times
 from .utils.pandas import replace_zero_and_space_strings_with_nulls
 
 __all__ = [
@@ -76,7 +75,7 @@ class GtfsFile(object):
     def file_columns(self) -> List[str]:
         """List of column names observed in the source file."""
         # only read the first five columns to sniff the data
-        df = pd.read_csv(self.file_path, header=0, nrows=5)
+        df = pd.read_csv(self.file_path, header=0, nrows=5, encoding_errors="ignore")
 
         # get the columns
         columns = df.columns.tolist()
@@ -151,6 +150,7 @@ class GtfsFile(object):
                 sep=",",
                 header=0,
                 dtype=self.pandas_dtype,
+                encoding_errors="ignore",
             )
 
         # otherwise, just return the columns listed to use
@@ -161,6 +161,7 @@ class GtfsFile(object):
                 sep=",",
                 header=0,
                 dtype=self.pandas_dtype,
+                encoding_errors="ignore",
             )
 
         # make sure zero length or all space strings are null
@@ -482,10 +483,9 @@ class GtfsDataset(object):
             calendar = GtfsCalendar(self._calendar_pth)
 
         # if calendar.txt does not exist, infer from calendar-dates.txt if desired
-        elif self.infer_calendar:
-            raise NotImplementedError(
-                "calendar.txt not found, and inferencing from calendar-dates.txt has not yet been implemented."
-            )
+        elif self.infer_calendar and self._calendar_dates_pth.exists():
+            logging.debug('calendar.txt does not exist, so inferring calendar from calendar-dates.txt')
+            calendar = get_calendar_from_calendar_dates(self.calendar_dates.data)
 
         else:
             raise FileNotFoundError(
