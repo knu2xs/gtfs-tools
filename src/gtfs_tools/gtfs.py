@@ -1,4 +1,5 @@
 import csv
+import logging
 import tempfile
 import zipfile
 from functools import cached_property
@@ -26,55 +27,6 @@ __all__ = [
 ]
 
 
-class GtfsDataset(object):
-    """
-    GTFS dataset with ingestion and processing capabilities.
-    """
-
-    def __init__(self, gtfs_folder: Path) -> None:
-        """
-        Args:
-            gtfs_folder: Directory containing GTFS data.
-        """
-        self.gtfs_folder = gtfs_folder
-
-        # create child GtfsFile objects from the paths
-        self.agency = GtfsAgency(self.gtfs_folder / "agency.txt")
-        self.calendar = GtfsCalendar(self.gtfs_folder / "calendar.txt")
-        self.calendar_dates = GtfsCalendarDates(self.gtfs_folder / "calendar_dates.txt")
-        self.frequencies = GtfsFrequencies(self.gtfs_folder / "frequencies.txt")
-        self.routes = GtfsRoutes(self.gtfs_folder / "routes.txt")
-        self.shapes = GtfsShapes(self.gtfs_folder / "shapes.txt")
-        self.stops = GtfsStops(self.gtfs_folder / "stops.txt")
-        self.stop_times = GtfsStopTimes(self.gtfs_folder / "stop_times.txt")
-        self.trips = GtfsTrips(self.gtfs_folder / "trips.txt")
-
-    @classmethod
-    def from_zip(
-        cls, zip_path: Path, output_directory: Optional[Path] = None
-    ) -> "GtfsDataset":
-        """
-        Create a ``GtfsDataset`` from a zip file.
-
-        Args:
-            zip_path: Path to the zip file.
-            output_directory: Optional directory to output the dataset to. If not provided, data will be unpacked
-                to the temp directory.
-        """
-        # if no directory provided, just use a temp directory
-        if output_directory is None:
-            output_directory = tempfile.mkdtemp()
-
-        # unpack the zipped archive
-        with zipfile.ZipFile(zip_path, "r") as zipper:
-            zipper.extractall(output_directory)
-
-        # create the GtfsDataset object instance
-        gtfs = cls(output_directory)
-
-        return gtfs
-
-
 class GtfsFile(object):
     """
     Template object for child files in GTFS datasets.
@@ -88,7 +40,11 @@ class GtfsFile(object):
     boolean_columns: List = []
     _use_columns = []
 
-    def __init__(self, file_path: Path, all_columns: bool = True) -> None:
+    def __init__(
+        self,
+        file_path: Path,
+        all_columns: Optional[bool] = True,
+    ) -> None:
         """
         Args:
             file_path: Location where to find file to read.
@@ -436,6 +392,21 @@ class GtfsStopTimes(GtfsFile):
     integer_columns = ["stop_sequence"]
     datetime_columns = ["arrival_time", "departure_time"]
 
+    def __init__(
+        self,
+        file_path: Path,
+        all_columns: Optional[bool] = True,
+        infer_missing: Optional[bool] = False,
+    ) -> None:
+        """
+        Args:
+            file_path: Location where to find file to read.
+            all_columns: Whether desired to return all columns when reading data or not.
+            infer_missing: Whether to infer missing arrival and departure values when reading data or not.
+        """
+        super().__init__(file_path, all_columns)
+        self.infer_missing = infer_missing
+
 
 class GtfsTrips(GtfsFile):
     """Trips GTFS file."""
@@ -450,3 +421,115 @@ class GtfsTrips(GtfsFile):
         "wheelchair_accessible",
         "bikes_allowed",
     ]
+
+
+class GtfsDataset(object):
+    """
+    GTFS dataset with ingestion and processing capabilities.
+    """
+
+    def __init__(
+        self,
+        gtfs_folder: Path,
+        infer_stop_times: Optional[bool] = True,
+        infer_calendar: Optional[bool] = True,
+    ) -> None:
+        """
+        Args:
+            gtfs_folder: Directory containing GTFS data.
+            infer_stop_times: Whether to infer stop times, missing arrival and departure times.
+            infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
+        """
+        self.gtfs_folder = gtfs_folder
+        self.infer_stop_times = infer_stop_times
+
+        # paths to child resources
+        self._agency_pth = self.gtfs_folder / "agency.txt"
+        self._calendar_pth = self.gtfs_folder / "calendar.txt"
+        self._calendar_dates_pth = self.gtfs_folder / "calendar-dates.txt"
+        self._frequencies_pth = self.gtfs_folder / "frequencies.txt"
+        self._routes_pth = self.gtfs_folder / "routes.txt"
+        self._shapes_pth = self.gtfs_folder / "shapes.txt"
+        self._stops_pth = self.gtfs_folder / "stops.txt"
+        self._stop_times_pth = self.gtfs_folder / "stop_times.txt"
+        self._trips_pth = self.gtfs_folder / "trips.txt"
+
+    @cached_property
+    def agency(self) -> GtfsAgency:
+        agency = GtfsAgency(self._agency_pth)
+        return agency
+
+    @cached_property
+    def calendar(self) -> GtfsCalendar:
+        # if calendar.txt is present in this dataset
+        if self._calendar_pth.exists():
+            calendar = GtfsCalendar(self._calendar_pth)
+
+        # if calendar.txt does not exist, infer from calendar-dates.txt
+        else:
+            raise NotImplementedError(
+                "calendar.txt not found, and inferencing from calendar-dates.txt has not yet been implemented."
+            )
+        return calendar
+
+    @cached_property
+    def calendar_dates(self) -> GtfsCalendarDates:
+        calendar_dates = GtfsCalendarDates(self._calendar_dates_pth)
+        return calendar_dates
+
+    @cached_property
+    def frequencies(self) -> GtfsFrequencies:
+        frequencies = GtfsFrequencies(self._frequencies_pth)
+        return frequencies
+
+    @cached_property
+    def routes(self) -> GtfsRoutes:
+        routes = GtfsRoutes(self._routes_pth)
+        return routes
+
+    @cached_property
+    def shapes(self) -> GtfsShapes:
+        shapes = GtfsShapes(self._shapes_pth)
+        return shapes
+
+    @cached_property
+    def stops(self) -> GtfsStops:
+        stops = GtfsStops(self._stops_pth)
+        return stops
+
+    @cached_property
+    def stop_times(self) -> GtfsStopTimes:
+        stop_times = GtfsStopTimes(
+            self._stop_times_pth, infer_missing=self.infer_stop_times
+        )
+        return stop_times
+
+    @cached_property
+    def trips(self) -> GtfsTrips:
+        trips = GtfsTrips(self._trips_pth)
+        return trips
+
+    @classmethod
+    def from_zip(
+        cls, zip_path: Path, output_directory: Optional[Path] = None
+    ) -> "GtfsDataset":
+        """
+        Create a ``GtfsDataset`` from a zip file.
+
+        Args:
+            zip_path: Path to the zip file.
+            output_directory: Optional directory to output the dataset to. If not provided, data will be unpacked
+                to the temp directory.
+        """
+        # if no directory provided, just use a temp directory
+        if output_directory is None:
+            output_directory = tempfile.mkdtemp()
+
+        # unpack the zipped archive
+        with zipfile.ZipFile(zip_path, "r") as zipper:
+            zipper.extractall(output_directory)
+
+        # create the GtfsDataset object instance
+        gtfs = cls(output_directory)
+
+        return gtfs

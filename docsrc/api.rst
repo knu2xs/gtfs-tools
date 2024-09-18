@@ -1,9 +1,6 @@
 GTFS-Tools API
 ***************
 
-Example using the `Sphinx Autodoc`_ extension to document the automatically included support library for this
-project located in ``./src/gtfs_tools``.
-
 .. automodule:: gtfs_tools
     :members:
 
