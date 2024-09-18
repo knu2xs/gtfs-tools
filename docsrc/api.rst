@@ -10,6 +10,12 @@ project located in ``./src/gtfs_tools``.
 .. automodule:: gtfs_tools
     :members:
 
+gtfs_tools.gtfs
+-----------------------------------------------------------
+
+.. automodule:: gtfs_tools.gtfs
+    :members:
+
 gtfs_tools.utils
 -----------------------------------------------------------
 
