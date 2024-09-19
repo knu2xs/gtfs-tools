@@ -1,5 +1,6 @@
 import datetime
 import logging
+from pathlib import Path
 
 import pandas as pd
 
@@ -145,12 +146,31 @@ def get_calendar_from_calendar_dates(calendar_dates: pd.DataFrame) -> pd.DataFra
     # remove the status column name left over from the pivot
     df_cal.columns.name = None
 
-    # pluck out current year
-    yr = str(datetime.datetime.now().year)
+    # pluck out current year and make a start and end year five years before and after
+    yr = datetime.datetime.now().year
+    start_year = yr - 5
+    end_year = yr + 5
 
     # set the start and end date columns to be compliant
     # TODO: Potentially introspectively retrieve these from calendar_dates if eventually a business need arises
-    df_cal["start_date"] = f"{yr}0101"
-    df_cal["end_date"] = f"{yr}1231"
+    df_cal["start_date"] = f"{start_year}0101"
+    df_cal["end_date"] = f"{end_year}1231"
 
     return df_cal
+
+
+def get_route_types() -> pd.DataFrame:
+    """Get a route types dataframe with translations between european codes and standard GTFS route type codes."""
+    # create a data frame of descriptions for the route types
+    _route_type_pth = (
+        Path(__file__).parent.parent / "assets" / "gtfs_modality_translation.csv"
+    )
+
+    route_type_df = pd.read_csv(
+        filepath_or_buffer=_route_type_pth,
+        names=["route_type", "route_type_desc", "route_type_carto"],
+        dtype={"route_type": str, "route_type_desc": str, "route_type_carto": str},
+        index_col="route_type",
+    )
+
+    return route_type_df

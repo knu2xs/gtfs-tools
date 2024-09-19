@@ -3,7 +3,7 @@ import tempfile
 import zipfile
 from functools import cached_property
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from arcgis.features import GeoAccessor
 from arcgis.geometry import Point, Polyline
@@ -33,29 +33,37 @@ class GtfsFile(object):
     Template object for child files in GTFS datasets.
     """
 
-    # constants to be set in children
+    # variables to be set in children
     required_columns: List = []
     string_columns: List = []
     integer_columns: List = []
     float_columns: List = []
     boolean_columns: List = []
-    _use_columns = []
+    _use_columns: List = []
 
     def __init__(
         self,
-        file_path: Path,
+        source: Union[Path, pd.DataFrame],
         all_columns: Optional[bool] = True,
     ) -> None:
         """
         Args:
-            file_path: Location where to find file to read.
+            source: Location where to find data to use.
             all_columns: Whether desired to return all columns when reading data or not.
         """
         # save variables
         self.all_columns = all_columns
 
         # make sure the listed path is a path
-        self.file_path = Path(file_path) if isinstance(file_path, str) else file_path
+        if isinstance(source, str):
+            self._df = None
+            self.file_path = Path(source)
+        elif isinstance(source, Path):
+            self._df = None
+            self.file_path = source
+        else:  # data frame
+            self._df = source
+            self.file_path = None
 
         # if no columns listed to use, just use required columns if populated
         if len(self._use_columns) == 0 and len(self.required_columns) > 0:
@@ -73,9 +81,16 @@ class GtfsFile(object):
 
     @cached_property
     def file_columns(self) -> List[str]:
-        """List of column names observed in the source file."""
-        # only read the first five columns to sniff the data
-        df = pd.read_csv(self.file_path, header=0, nrows=5, encoding_errors="ignore")
+        """List of column names observed in the source."""
+        # if no file, constructed directly from data frame
+        if self.file_path is None:
+            df = self._df
+
+        else:
+            # only read the first five columns to sniff the data
+            df = pd.read_csv(
+                self.file_path, header=0, nrows=5, encoding_errors="ignore"
+            )
 
         # get the columns
         columns = df.columns.tolist()
@@ -132,47 +147,63 @@ class GtfsFile(object):
 
         return dtype
 
-    def _read_file(self, all_columns: bool) -> pd.DataFrame():
+    def _read_source(self, all_columns: bool) -> pd.DataFrame():
         """Helper to read the CSV file."""
-        # check to see if the file even exists
-        if not self.file_path.exists():
-            raise FileNotFoundError(
-                f"Cannot locate {self.file_path} to create the data for {self.__class__.__name__}."
-            )
+        # if the data frame is not already populated, read it from the source file.
+        if self._df is None:
+            # check to see if the file even exists
+            if not self.file_path.exists():
+                raise FileNotFoundError(
+                    f"Cannot locate {self.file_path} to create the data for {self.__class__.__name__}."
+                )
 
-        # ensure required columns are in source data
-        self._ensure_columns()
+            # ensure required columns are in source data
+            self._ensure_columns()
 
-        # if reading all the columns, read the data and return the result
-        if all_columns:
-            df = pd.read_csv(
-                filepath_or_buffer=self.file_path,
-                sep=",",
-                header=0,
-                dtype=self.pandas_dtype,
-                encoding_errors="ignore",
-            )
+            # if reading all the columns, read the data and return the result
+            if all_columns:
+                df = pd.read_csv(
+                    filepath_or_buffer=self.file_path,
+                    sep=",",
+                    header=0,
+                    dtype=self.pandas_dtype,
+                    encoding_errors="ignore",
+                )
 
-        # otherwise, just return the columns listed to use
+            # otherwise, just return the columns listed to use
+            else:
+                df = pd.read_csv(
+                    filepath_or_buffer=self.file_path,
+                    usecols=self.use_columns,
+                    sep=",",
+                    header=0,
+                    dtype=self.pandas_dtype,
+                    encoding_errors="ignore",
+                )
+
+            # make sure zero length or all space strings are null
+            df = replace_zero_and_space_strings_with_nulls(df)
+
         else:
-            df = pd.read_csv(
-                filepath_or_buffer=self.file_path,
-                usecols=self.use_columns,
-                sep=",",
-                header=0,
-                dtype=self.pandas_dtype,
-                encoding_errors="ignore",
-            )
+            # make sure columns are present
+            self._ensure_columns()
 
-        # make sure zero length or all space strings are null
-        df = replace_zero_and_space_strings_with_nulls(df)
+            # use cached data
+            df = self._df
+
+            # prune schema if necessary
+            if not all_columns and df.columns.tolist() != self.use_columns:
+                df = df.loc[:, self.use_columns]
 
         return df
 
     @cached_property
     def data(self) -> pd.DataFrame:
         """Pandas data frame of the file data."""
-        df = self._read_file(self.all_columns)
+
+        # get the data frame
+        df = self._read_source(self.all_columns)
+
         return df
 
 
@@ -187,7 +218,7 @@ class GtfsAgency(GtfsFile):
         """Pandas data frame of the file data."""
 
         # get the data frame
-        df = self._read_file(self.all_columns)
+        df = self._read_source(self.all_columns)
 
         # if the agency_id is not in the source data, add one to use
         if "agency_id" not in df.columns:
@@ -235,7 +266,7 @@ class GtfsCalendar(GtfsFile):
         """Pandas data frame of the file data."""
 
         # get the data frame
-        df = self._read_file(self.all_columns)
+        df = self._read_source(self.all_columns)
 
         # convert the start and end dates to datetime
         for dt_col in ("start_date", "end_date"):
@@ -256,7 +287,7 @@ class GtfsCalendarDates(GtfsFile):
         """Pandas data frame of the file data."""
 
         # get the data frame
-        df = self._read_file(self.all_columns)
+        df = self._read_source(self.all_columns)
 
         # convert date column to datetime
         df["date"] = pd.to_datetime(df["date"], format="%Y%m%d")
@@ -292,7 +323,7 @@ class GtfsRoutes(GtfsFile):
         """Pandas data frame of the file data."""
 
         # get the data frame
-        df = self._read_file(self.all_columns)
+        df = self._read_source(self.all_columns)
 
         # if the agency id column is not in the input, add it and leave it empty
         if "agency_id" not in df.columns:
@@ -343,7 +374,7 @@ class GtfsStops(GtfsFile):
         """Pandas data frame of the file data."""
 
         # get the data frame
-        df = self._read_file(self.all_columns)
+        df = self._read_source(self.all_columns)
 
         # add the parent station column and location type columns if not in the source data
         if "parent_station" not in df.columns:
@@ -388,17 +419,17 @@ class GtfsStopTimes(GtfsFile):
 
     def __init__(
         self,
-        file_path: Path,
+        source: Path,
         all_columns: Optional[bool] = True,
         infer_missing: Optional[bool] = False,
     ) -> None:
         """
         Args:
-            file_path: Location where to find file to read.
+            source: Location where to find file to read.
             all_columns: Whether desired to return all columns when reading data or not.
             infer_missing: Whether to infer missing arrival and departure values when reading data or not.
         """
-        super().__init__(file_path, all_columns)
+        super().__init__(source, all_columns)
         self.infer_missing = infer_missing
 
     @cached_property
@@ -406,7 +437,7 @@ class GtfsStopTimes(GtfsFile):
         """Pandas data frame of the file data."""
 
         # get the data frame
-        df = self._read_file(self.all_columns)
+        df = self._read_source(self.all_columns)
 
         # cast arrival and departure times to timedelta objects
         for col in ["arrival_time", "departure_time"]:
@@ -473,19 +504,36 @@ class GtfsDataset(object):
 
     @cached_property
     def agency(self) -> GtfsAgency:
+        """Agency data from GTFS file."""
         agency = GtfsAgency(self._agency_pth)
         return agency
 
     @cached_property
     def calendar(self) -> GtfsCalendar:
+        """
+        Calendar data from GTFS file.
+
+        .. note::
+
+            If the ``calendar.txt`` file is not present, by default, this will be inferred from the
+            ``calendar-dates.txt`` file.
+
+        """
         # if calendar.txt is present in this dataset
         if self._calendar_pth.exists():
             calendar = GtfsCalendar(self._calendar_pth)
 
         # if calendar.txt does not exist, infer from calendar-dates.txt if desired
         elif self.infer_calendar and self._calendar_dates_pth.exists():
-            logging.debug('calendar.txt does not exist, so inferring calendar from calendar-dates.txt')
-            calendar = get_calendar_from_calendar_dates(self.calendar_dates.data)
+            logging.debug(
+                "calendar.txt does not exist, so inferring calendar from calendar-dates.txt"
+            )
+
+            # get a raw calendar data frame built from calendar-dates.txt
+            raw_df = get_calendar_from_calendar_dates(self.calendar_dates.data)
+
+            # build calendar from the inferred raw data
+            calendar = GtfsCalendar(raw_df)
 
         else:
             raise FileNotFoundError(
@@ -496,31 +544,46 @@ class GtfsDataset(object):
 
     @cached_property
     def calendar_dates(self) -> GtfsCalendarDates:
+        """Calendar dates data from GTFS file."""
         calendar_dates = GtfsCalendarDates(self._calendar_dates_pth)
         return calendar_dates
 
     @cached_property
     def frequencies(self) -> GtfsFrequencies:
+        """Frequencies data from GTFS file."""
         frequencies = GtfsFrequencies(self._frequencies_pth)
         return frequencies
 
     @cached_property
     def routes(self) -> GtfsRoutes:
+        """Routes data from GTFS file."""
         routes = GtfsRoutes(self._routes_pth)
         return routes
 
     @cached_property
     def shapes(self) -> GtfsShapes:
+        """Shapes data from GTFS file."""
         shapes = GtfsShapes(self._shapes_pth)
         return shapes
 
     @cached_property
     def stops(self) -> GtfsStops:
+        """Stops data from GTFS file."""
         stops = GtfsStops(self._stops_pth)
         return stops
 
     @cached_property
     def stop_times(self) -> GtfsStopTimes:
+        """
+        Stop times data from GTFS file.
+
+        .. note::
+
+            If ``arrival_times`` and ``departure_times`` are only provided for the beginning and end of a trip,
+            intermediate stop times will be inferred by evenly distributing the intervals between the provided
+            starting and ending times for the route.
+
+        """
         stop_times = GtfsStopTimes(
             self._stop_times_pth, infer_missing=self.infer_stop_times
         )
@@ -528,6 +591,7 @@ class GtfsDataset(object):
 
     @cached_property
     def trips(self) -> GtfsTrips:
+        """Trips data from GTFS file."""
         trips = GtfsTrips(self._trips_pth)
         return trips
 
@@ -547,11 +611,29 @@ class GtfsDataset(object):
         if output_directory is None:
             output_directory = tempfile.mkdtemp()
 
-        # unpack the zipped archive
-        with zipfile.ZipFile(zip_path, "r") as zipper:
-            zipper.extractall(output_directory)
+        # unpack the gtfs dataset
+        output_directory = cls.unzip(zip_path, output_directory)
 
         # create the GtfsDataset object instance
         gtfs = cls(output_directory)
 
         return gtfs
+
+    @staticmethod
+    def unzip(zip_path: Path, output_directory: Path) -> Path:
+        """
+        Unpack a zipped GTFS dataset.
+
+        Args:
+            zip_path: Path to the zip file.
+            output_directory: Directory to unpack the output the dataset to.
+        """
+        # unpack the zipped archive
+        with zipfile.ZipFile(zip_path, "r") as zipper:
+            zipper.extractall(output_directory)
+
+        # ensure path
+        if isinstance(output_directory, str):
+            output_directory = Path(output_directory)
+
+        return output_directory
