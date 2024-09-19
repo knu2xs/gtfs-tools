@@ -1,6 +1,3 @@
-"""
-GTFS module documentation.
-"""
 import logging
 import tempfile
 import zipfile
@@ -78,6 +75,9 @@ class GtfsFile(object):
         # if no columns listed to use, just use required columns if populated
         if len(self._use_columns) == 0 and len(self.required_columns) > 0:
             self._use_columns = self.required_columns
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}: {self.file_path}"
 
     @cached_property
     def use_columns(self) -> list[str]:
@@ -370,6 +370,7 @@ class GtfsShapes(GtfsFile):
             )
             .rename("SHAPE")
             .to_frame()
+            .reset_index()
             .spatial.set_geometry("SHAPE", inplace=False)
         )
 
@@ -396,7 +397,7 @@ class GtfsStops(GtfsFile):
             df["parent_station"] = pd.Series(dtype=str)
 
         if "location_type" not in df.columns:
-            df["location_type"] = pd.Series(dtype=int)
+            df["location_type"] = pd.Series(dtype="Int64")
 
         # apply a default location type if not populated
         df["location_type"].fillna(0, inplace=True)
@@ -469,7 +470,7 @@ class GtfsTrips(GtfsFile):
     """Trips GTFS file."""
 
     required_columns = ["trip_id", "route_id", "service_id"]
-    string_columns = ["trip_id", "route_id", "service_id"]
+    string_columns = ["trip_id", "route_id", "service_id", "shape_id"]
     integer_columns = ["wheelchair_accessible", "bikes_allowed"]
     _use_columns = [
         "trip_id",
@@ -532,6 +533,9 @@ class GtfsDataset(object):
         self._stops_pth = self.gtfs_folder / "stops.txt"
         self._stop_times_pth = self.gtfs_folder / "stop_times.txt"
         self._trips_pth = self.gtfs_folder / "trips.txt"
+
+    def __repr__(self):
+        return f"GtfsDataset: {self.gtfs_folder}"
 
     @cached_property
     def agency(self) -> GtfsAgency:
@@ -720,37 +724,37 @@ class GtfsDataset(object):
         return valid
 
     @cached_property
-    def crosstab_stop_trip(self) -> pd.DataFrame:
+    def _crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
         df = self.stop_times.data[["stop_id", "trip_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_trip_route(self) -> pd.DataFrame:
+    def _crosstab_trip_route(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
         to routes."""
         df = self.trips.data[["trip_id", "route_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_trip_service(self) -> pd.DataFrame:
+    def _crosstab_trip_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
         trips to calendar."""
         df = self.trips.data[["trip_id", "service_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_route_agency(self) -> pd.DataFrame:
+    def _crosstab_route_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between routes and agencies."""
         df = self.routes.data[["route_id", "agency_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_stop_route(self) -> pd.DataFrame:
+    def _crosstab_stop_route(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and routes."""
         df = (
-            self.crosstab_stop_trip.join(
-                self.crosstab_trip_route.set_index("trip_id"), on="trip_id", how="left"
+            self._crosstab_stop_trip.join(
+                self._crosstab_trip_route.set_index("trip_id"), on="trip_id", how="left"
             )[["stop_id", "route_id"]]
             .drop_duplicates()
             .reset_index(drop=True)
@@ -758,10 +762,10 @@ class GtfsDataset(object):
         return df
 
     @cached_property
-    def crosstab_stop_agency(self) -> pd.DataFrame:
+    def _crosstab_stop_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between trips and agency id."""
         df = (
-            self.crosstab_stop_route.join(
+            self._crosstab_stop_route.join(
                 self.routes.data[["route_id", "agency_id"]].set_index("route_id"),
                 on="route_id",
                 how="left",
@@ -776,9 +780,21 @@ class GtfsDataset(object):
     def crosstab_stop_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
         between stops and calendar."""
-        df = self.crosstab_stop_trip.join(
-            self.crosstab_trip_service.set_index("trip_id"), on="trip_id"
+        df = self._crosstab_stop_trip.join(
+            self._crosstab_trip_service.set_index("trip_id"), on="trip_id"
         )[["stop_id", "service_id"]].drop_duplicates()
+        return df
+
+    @cached_property
+    def _crosstab_shape_route(self) -> pd.DataFrame:
+        """Data frame with crosstab lookup between shapes and routes."""
+        df = (
+            self.trips.data.loc[
+                ~self.trips.data["shape_id"].isnull(), ["shape_id", "route_id"]
+            ]
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
         return df
 
     @cached_property
@@ -808,7 +824,7 @@ class GtfsDataset(object):
         """
         df = (
             self.stops.data.join(
-                self.crosstab_stop_agency.set_index("stop_id"),
+                self._crosstab_stop_agency.set_index("stop_id"),
                 on="stop_id",
                 how="outer",
             )
@@ -816,4 +832,33 @@ class GtfsDataset(object):
             .sort_values(["stop_id", "agency_name"])
             .reset_index(drop=True)
         )
+        return df
+
+    @cached_property
+    def routes_sedf(self) -> pd.DataFrame:
+        """
+        Routes with geometry from shapes as a Spatially Enabled Data Frame.
+        """
+        df = (
+            self.routes.data.join(
+                self._crosstab_shape_route.set_index("route_id"),
+                on="route_id",
+                how="left",
+            )
+            .join(self.shapes.sedf.set_index("shape_id"), on="shape_id", how="left")
+            .reset_index(drop=True)
+            .spatial.set_geometry("SHAPE", inplace=False)
+        )
+
+        return df
+
+    @cached_property
+    def trips_sedf(self) -> pd.DataFrame:
+        """
+        Trips with geometry from shapes as a Spatially Enabled Data Frame.
+        """
+        df = self.trips.data.join(
+            self.shapes.sedf.set_index("shape_id"), on="shape_id", how="left"
+        ).spatial.set_geometry("SHAPE", inplace=False)
+
         return df
