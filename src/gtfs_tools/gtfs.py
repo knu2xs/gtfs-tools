@@ -720,33 +720,33 @@ class GtfsDataset(object):
         return valid
 
     @cached_property
-    def crosstab_stop_trip(self):
+    def crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
         df = self.stop_times.data[["stop_id", "trip_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_trip_route(self):
+    def crosstab_trip_route(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
         to routes."""
         df = self.trips.data[["trip_id", "route_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_trip_service(self):
+    def crosstab_trip_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
         trips to calendar."""
         df = self.trips.data[["trip_id", "service_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_route_agency(self):
+    def crosstab_route_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between routes and agencies."""
         df = self.routes.data[["route_id", "agency_id"]].drop_duplicates()
         return df
 
     @cached_property
-    def crosstab_stop_route(self):
+    def crosstab_stop_route(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and routes."""
         df = (
             self.crosstab_stop_trip.join(
@@ -758,7 +758,7 @@ class GtfsDataset(object):
         return df
 
     @cached_property
-    def crosstab_stop_agency(self):
+    def crosstab_stop_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between trips and agency id."""
         df = (
             self.crosstab_stop_route.join(
@@ -773,7 +773,7 @@ class GtfsDataset(object):
         return df
 
     @cached_property
-    def crosstab_stop_service(self):
+    def crosstab_stop_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
         between stops and calendar."""
         df = self.crosstab_stop_trip.join(
@@ -782,7 +782,7 @@ class GtfsDataset(object):
         return df
 
     @cached_property
-    def stops_with_calendar(self):
+    def stops_with_calendar(self) -> pd.DataFrame:
         """
         Stops with service days from calendar added. Since multiple trips (and routes) service a single stop, if the
         stop has service by *any* trip on a day, the stop then has service.
@@ -801,7 +801,7 @@ class GtfsDataset(object):
         return df
 
     @cached_property
-    def stops_with_agency(self):
+    def stops_with_agency(self) -> pd.DataFrame:
         """
         Stops data frame with agency id and name. Since multiple agencies can serve a single stop, stops may be
         listed more than once.
