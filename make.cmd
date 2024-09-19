@@ -43,7 +43,7 @@ GOTO %1
 
 :: Make documentation using Sphinx!
 :docs
-    CALL conda run -p %CONDA_DIR% sphinx-build -a -b html docsrc docs
+    CALL conda run -p %CONDA_DIR% sphinx-build -a -b html ./docsrc ./docs
     GOTO end
 
 :: Build the local environment from the environment file

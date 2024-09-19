@@ -1,9 +1,12 @@
+"""
+GTFS module documentation.
+"""
 import logging
 import tempfile
 import zipfile
 from functools import cached_property
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 from arcgis.features import GeoAccessor
 from arcgis.geometry import Point, Polyline
@@ -19,6 +22,7 @@ __all__ = [
     "GtfsCalendar",
     "GtfsCalendarDates",
     "GtfsDataset",
+    "GtfsFile",
     "GtfsFrequencies",
     "GtfsRoutes",
     "GtfsShapes",
@@ -34,25 +38,31 @@ class GtfsFile(object):
     """
 
     # variables to be set in children
-    required_columns: List = []
-    string_columns: List = []
-    integer_columns: List = []
-    float_columns: List = []
-    boolean_columns: List = []
-    _use_columns: List = []
+    required_columns: list[str] = []
+    string_columns: list[str] = []
+    integer_columns: list[str] = []
+    float_columns: list[str] = []
+    boolean_columns: list[str] = []
+    _use_columns: list[str] = []
 
     def __init__(
         self,
         source: Union[Path, pd.DataFrame],
         all_columns: Optional[bool] = True,
+        required_columns: Optional[list[str]] = None,
     ) -> None:
         """
         Args:
             source: Location where to find data to use.
             all_columns: Whether desired to return all columns when reading data or not.
+            required_columns: List of columns required for reading data. If not set, the defaults will be used.
         """
         # save variables
         self.all_columns = all_columns
+
+        # if required columns provided, overwrite defaults
+        if required_columns is not None:
+            self.required_columns = required_columns
 
         # make sure the listed path is a path
         if isinstance(source, str):
@@ -70,7 +80,7 @@ class GtfsFile(object):
             self._use_columns = self.required_columns
 
     @cached_property
-    def use_columns(self) -> List[str]:
+    def use_columns(self) -> list[str]:
         """Columns to be used when reading data if ``all_columns`` is ``False``."""
         if len(self._use_columns) == 0 and len(self.required_columns) > 0:
             cols = self.required_columns
@@ -80,7 +90,7 @@ class GtfsFile(object):
         return cols
 
     @cached_property
-    def file_columns(self) -> List[str]:
+    def file_columns(self) -> list[str]:
         """List of column names observed in the source."""
         # if no file, constructed directly from data frame
         if self.file_path is None:
@@ -107,7 +117,7 @@ class GtfsFile(object):
             )
 
     @cached_property
-    def use_columns(self) -> List[str]:
+    def use_columns(self) -> list[str]:
         """
         List of columns used to read the data from the file.
 
@@ -205,6 +215,11 @@ class GtfsFile(object):
         df = self._read_source(self.all_columns)
 
         return df
+
+    @cached_property
+    def count(self) -> int:
+        """Record count in the data frame."""
+        return self.data.shape[0]
 
 
 class GtfsAgency(GtfsFile):
@@ -475,12 +490,15 @@ class GtfsDataset(object):
         gtfs_folder: Path,
         infer_stop_times: Optional[bool] = True,
         infer_calendar: Optional[bool] = True,
+        required_files: Optional[list[str]] = None,
     ) -> None:
         """
         Args:
             gtfs_folder: Directory containing GTFS data.
             infer_stop_times: Whether to infer stop times, missing arrival and departure times.
             infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
+            required_files: List of files required for the GTFS dataset. By default, these include ``[ "agency.txt",
+                "calendar.txt", "routes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]``
         """
         # ensure the directory is a path
         if isinstance(gtfs_folder, str):
@@ -490,6 +508,19 @@ class GtfsDataset(object):
         self.gtfs_folder = gtfs_folder
         self.infer_stop_times = infer_stop_times
         self.infer_calendar = infer_calendar
+
+        if required_files is None:
+            self.required_files = [
+                "agency.txt",
+                "calendar.txt",
+                "calendar_dates.txt",
+                "routes.txt",
+                "stops.txt",
+                "stop_times.txt",
+                "trips.txt",
+            ]
+        else:
+            self.required_files = required_files
 
         # paths to child resources
         self._agency_pth = self.gtfs_folder / "agency.txt"
@@ -637,3 +668,152 @@ class GtfsDataset(object):
             output_directory = Path(output_directory)
 
         return output_directory
+
+    def validate_files(self, calendar_or_calendar_dates: Optional[bool] = True) -> bool:
+        """
+        Ensure all necessary files are present. Required files are determined by the ``required_files`` construction
+        parameter.
+
+        Args:
+            calendar_or_calendar_dates: When scanning for files, accept the dataset if ``calendar_dates.txt`` is
+                present, even in the absence of ``calendar.txt``.
+        """
+        # pull out the required file names without the extension
+        req_lst = [f.rstrip(".txt") for f in self.required_files]
+
+        # get files present in the dataset directory
+        file_lst = [f.stem for f in self.gtfs_folder.glob("*.txt")]
+
+        # if handling calendar and calendar dates separately
+        if calendar_or_calendar_dates:
+            # check for the presence of the calendar or calendar_dates file
+            for f in file_lst:
+                # if calendar or calendar_dates found
+                if f in ["calendar", "calendar_dates"]:
+                    # update the required files to no longer include calendar
+                    req_lst = [
+                        f for f in file_lst if f not in ["calendar", "calendar_dates"]
+                    ]
+
+        # check for the presence of all required files
+        missing_lst = set(req_lst) - set(file_lst)
+
+        # if there are missing files, then invalid
+        if len(missing_lst) == len(req_lst):
+            valid = False
+            logging.error(
+                f"Cannot locate any required files in the GTFS dataset {self.gtfs_folder.stem}."
+            )
+
+        elif len(missing_lst) > 0:
+            valid = False
+            logging.error(
+                f"GTFS dataset, {self.gtfs_folder.stem}, is missing required files: {missing_lst}"
+            )
+
+        else:
+            valid = True
+            logging.debug(
+                f"GTFS dataset, {self.gtfs_folder.stem}, includes all required files."
+            )
+
+        return valid
+
+    @cached_property
+    def crosstab_stop_trip(self):
+        """Data frame with crosstabs lookup between stops and trips."""
+        df = self.stop_times.data[["stop_id", "trip_id"]].drop_duplicates()
+        return df
+
+    @cached_property
+    def crosstab_trip_route(self):
+        """Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
+        to routes."""
+        df = self.trips.data[["trip_id", "route_id"]].drop_duplicates()
+        return df
+
+    @cached_property
+    def crosstab_trip_service(self):
+        """Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
+        trips to calendar."""
+        df = self.trips.data[["trip_id", "service_id"]].drop_duplicates()
+        return df
+
+    @cached_property
+    def crosstab_route_agency(self):
+        """Data frame with crosstab lookup between routes and agencies."""
+        df = self.routes.data[["route_id", "agency_id"]].drop_duplicates()
+        return df
+
+    @cached_property
+    def crosstab_stop_route(self):
+        """Data frame with crosstab lookup between stops and routes."""
+        df = (
+            self.crosstab_stop_trip.join(
+                self.crosstab_trip_route.set_index("trip_id"), on="trip_id", how="left"
+            )[["stop_id", "route_id"]]
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+        return df
+
+    @cached_property
+    def crosstab_stop_agency(self):
+        """Data frame with crosstab lookup between trips and agency id."""
+        df = (
+            self.crosstab_stop_route.join(
+                self.routes.data[["route_id", "agency_id"]].set_index("route_id"),
+                on="route_id",
+                how="left",
+            )
+            .drop(columns="route_id")
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+        return df
+
+    @cached_property
+    def crosstab_stop_service(self):
+        """Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
+        between stops and calendar."""
+        df = self.crosstab_stop_trip.join(
+            self.crosstab_trip_service.set_index("trip_id"), on="trip_id"
+        )[["stop_id", "service_id"]].drop_duplicates()
+        return df
+
+    @cached_property
+    def stops_with_calendar(self):
+        """
+        Stops with service days from calendar added. Since multiple trips (and routes) service a single stop, if the
+        stop has service by *any* trip on a day, the stop then has service.
+        """
+        df_svc = (
+            self.crosstab_stop_service.join(
+                self.calendar.data.set_index("service_id"), on="service_id", how="outer"
+            )
+            .drop(columns=["service_id", "start_date", "end_date"])
+            .groupby("stop_id")
+            .any()
+            .astype("Int64")
+        )
+
+        df = self.stops.data.join(df_svc, on="stop_id", how="left")
+        return df
+
+    @cached_property
+    def stops_with_agency(self):
+        """
+        Stops data frame with agency id and name. Since multiple agencies can serve a single stop, stops may be
+        listed more than once.
+        """
+        df = (
+            self.stops.data.join(
+                self.crosstab_stop_agency.set_index("stop_id"),
+                on="stop_id",
+                how="outer",
+            )
+            .join(self.agency.data.set_index("agency_id"), on="agency_id", how="left")
+            .sort_values(["stop_id", "agency_name"])
+            .reset_index(drop=True)
+        )
+        return df

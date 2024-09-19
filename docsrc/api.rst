@@ -1,14 +1,56 @@
 GTFS-Tools API
 ***************
 
+The foundation for GTFS-Tools is the :py:class:`gtfs_tools.gtfs.GtfsDataset` object. The properties representing
+each of the GTFS tables represented is a subclass of :py:class:`gtfs_tools.gtfs.GtfsFile`.
+
 .. automodule:: gtfs_tools
     :members:
 
 gtfs_tools.gtfs
 ================
 
-.. automodule:: gtfs_tools.gtfs
+.. autoclass:: gtfs_tools.gtfs.GtfsDataset
     :members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsFile
+    :members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsAgency
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsCalendar
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsCalendarDates
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsFrequencies
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsRoutes
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsShapes
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsStopTimes
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsStops
+    :members:
+    :inherited-members:
+
+.. autoclass:: gtfs_tools.gtfs.GtfsTrips
+    :members:
+    :inherited-members:
 
 gtfs_tools.utils
 =================

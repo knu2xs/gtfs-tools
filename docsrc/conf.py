@@ -75,7 +75,10 @@ extensions = [
     "nbsphinx",
 ]
 
-intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "pandas": ("http://pandas.pydata.org/pandas-docs/dev", None),
+}
 
 
 def skip(app, what, name, obj, would_skip, options):
