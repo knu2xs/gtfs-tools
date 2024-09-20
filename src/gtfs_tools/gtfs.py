@@ -11,7 +11,11 @@ import pandas as pd
 
 from .utils.dt import hh_mm_to_timedelta
 from .utils.exceptions import MissingRequiredColumnError
-from .utils.gtfs import get_calendar_from_calendar_dates, interpolate_stop_times
+from .utils.gtfs import (
+    get_calendar_from_calendar_dates,
+    interpolate_stop_times,
+    get_gtfs_directories,
+)
 from .utils.pandas import replace_zero_and_space_strings_with_nulls
 
 __all__ = [
@@ -321,11 +325,23 @@ class GtfsFrequencies(GtfsFile):
         "start_time",
         "end_time",
         "headway_secs",
-        "exact_times",
     ]
     string_columns = ["trip_id", "start_time", "end_time"]
     integer_columns = ["headway_secs"]
     boolean_columns = ["exact_times"]
+
+    @cached_property
+    def data(self) -> pd.DataFrame:
+        """Pandas data frame of the file data."""
+
+        # get the data frame
+        df = self._read_source(self.all_columns)
+
+        # cast arrival and departure times to timedelta objects
+        for col in ["start_time", "end_time"]:
+            df[col] = df[col].apply(lambda val: hh_mm_to_timedelta(val))
+
+        return df
 
 
 class GtfsRoutes(GtfsFile):
@@ -789,7 +805,12 @@ class GtfsDataset(object):
 
     @classmethod
     def from_zip(
-        cls, zip_path: Path, output_directory: Optional[Path] = None
+        cls,
+        zip_path: Path,
+        output_directory: Optional[Path] = None,
+        infer_stop_times: Optional[bool] = True,
+        infer_calendar: Optional[bool] = True,
+        required_files: Optional[list[str]] = None,
     ) -> "GtfsDataset":
         """
         Create a ``GtfsDataset`` from a zip file.
@@ -798,16 +819,40 @@ class GtfsDataset(object):
             zip_path: Path to the zip file.
             output_directory: Optional directory to output the dataset to. If not provided, data will be unpacked
                 to the temp directory.
+            infer_stop_times: Whether to infer stop times, missing arrival and departure times.
+            infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
+            required_files: List of files required for the GTFS dataset. By default, these include ``[ "agency.txt",
+                "calendar.txt", "routes.txt", "shapes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]``
         """
         # if no directory provided, just use a temp directory
         if output_directory is None:
             output_directory = tempfile.mkdtemp()
 
         # unpack the gtfs dataset
-        output_directory = cls.unzip(zip_path, output_directory)
+        unpack_dir = cls.unzip(zip_path, output_directory)
+
+        # find the gtfs dataset(s) in the extracted location
+        gtfs_dir_lst = get_gtfs_directories(unpack_dir)
+
+        # ensure only one GTFS dataset is found
+        if len(gtfs_dir_lst) == 0:
+            raise FileNotFoundError(
+                "Cannot locate a GTFS dataset in the extracted files."
+            )
+        elif len(gtfs_dir_lst) > 1:
+            raise Exception(
+                "Detected more than one GTFS dataset in the extracted files."
+            )
+        else:
+            gtfs_dir = gtfs_dir_lst[0].parent
 
         # create the GtfsDataset object instance
-        gtfs = cls(output_directory)
+        gtfs = cls(
+            gtfs_dir,
+            infer_stop_times=infer_stop_times,
+            infer_calendar=infer_calendar,
+            required_files=required_files,
+        )
 
         return gtfs
 

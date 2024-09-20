@@ -4,6 +4,34 @@ from pathlib import Path
 
 import pandas as pd
 
+__all__ = [
+    "get_calendar_from_calendar_dates",
+    "get_gtfs_directories",
+    "get_route_types",
+    "interpolate_stop_times",
+]
+
+
+def get_gtfs_directories(parent_dir: Path) -> list[Path]:
+    """
+    Get a list of GTFS directories below a parent directory.
+
+    .. note::
+        This is based on searching for the required agency.txt file. Consequently, if this is missing,
+        the GTFS directory will not be detected.
+
+    Args:
+        parent_dir (Path): Path to the parent directory to search in.
+    """
+    # ensure parent directory is a path
+    if isinstance(parent_dir, str):
+        parent_dir = Path(parent_dir)
+
+    # use list comprehension to search for required file, agency
+    pth_lst = [pth.parent for pth in parent_dir.glob("**/agency.txt")]
+
+    return pth_lst
+
 
 def interpolate_stop_times(stop_times_df: pd.DataFrame) -> pd.DataFrame:
     """Helper to preprocess stop times arrival and departure columns before validation handling over 24 hours caveat."""

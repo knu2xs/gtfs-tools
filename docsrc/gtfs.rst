@@ -3,7 +3,7 @@ GTFS Public Transit Data
 
 The source data used to calculate the Transit Accessibility Index is General Transit Feed Specification (GTFS),
 made publicly available through the Mobility Database Catalog by contributing public transit agencies.
-Conceived by Portland TriMet, popularized by Google and  and now adopted by the US Department of Transportation
+Conceived by Portland TriMet, popularized by Google, and now adopted by the US Department of Transportation
 (`National Transit Database Reporting Changes, 2022`_), GTFS is a standardized data schema for transit agencies to
 provide access to information about their services.
 
