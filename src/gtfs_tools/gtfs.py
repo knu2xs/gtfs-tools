@@ -47,15 +47,18 @@ class GtfsFile(object):
         source: Union[Path, pd.DataFrame],
         all_columns: Optional[bool] = True,
         required_columns: Optional[list[str]] = None,
+        parent: Optional["GtfsDataset"] = None,
     ) -> None:
         """
         Args:
             source: Location where to find data to use.
             all_columns: Whether desired to return all columns when reading data or not.
             required_columns: List of columns required for reading data. If not set, the defaults will be used.
+            parent: Parent GTFS dataset object.
         """
         # save variables
         self.all_columns = all_columns
+        self.parent = parent
 
         # if required columns provided, overwrite defaults
         if required_columns is not None:
@@ -346,6 +349,33 @@ class GtfsRoutes(GtfsFile):
 
         return df
 
+    @cached_property
+    def sedf(self) -> pd.DataFrame:
+        """
+        Routes with geometry from shapes as a Spatially Enabled Data Frame.
+        """
+        if self.parent is None:
+            raise ValueError(
+                "Cannot detect parent GtfsDataset, so cannot retrieve shapes."
+            )
+
+        else:
+            df = (
+                self.data.join(
+                    self.parent._crosstab_shape_route.set_index("route_id"),
+                    on="route_id",
+                    how="left",
+                )
+                .join(
+                    self.parent.shapes.sedf.set_index("shape_id"),
+                    on="shape_id",
+                    how="left",
+                )
+                .reset_index(drop=True)
+                .spatial.set_geometry("SHAPE", inplace=False)
+            )
+        return df
+
 
 class GtfsShapes(GtfsFile):
     """Shapes GTFS file."""
@@ -411,12 +441,94 @@ class GtfsStops(GtfsFile):
         df = self.data.copy()
 
         # create geometry from the longitude (X) and latitude (Y) columns
-        df["SHAPE"] = df["stop_lon", "stop_lat"].apply(
+        df["SHAPE"] = df[["stop_lon", "stop_lat"]].apply(
             lambda r: Point({"x": r[0], "y": r[1], "spatialReference": {"wkid": 4326}}),
             axis=1,
         )
         df.spatial.set_geometry("SHAPE", inplace=True)
 
+        return df
+
+    @cached_property
+    def _df_svc(self):
+        df_svc = (
+            self.parent._crosstab_stop_service.join(
+                self.parent.calendar.data.set_index("service_id"),
+                on="service_id",
+                how="outer",
+            )
+            .drop(columns=["service_id", "start_date", "end_date"])
+            .groupby("stop_id")
+            .any()
+            .astype("Int64")
+        )
+        return df_svc
+
+    @cached_property
+    def data_with_calendar(self) -> pd.DataFrame:
+        """
+        Stops with service days from calendar added. Since multiple trips (and routes) service a single stop, if the
+        stop has service by *any* trip on a day, the stop then has service.
+        """
+        df = self.data.join(self._df_svc, on="stop_id", how="left")
+        return df
+
+    @cached_property
+    def sedf_with_calendar(self) -> pd.DataFrame:
+        """
+        Stops as a Spatially Enabled Data Frame with service days from calendar added. Since multiple trips (and
+        routes) service a single stop, if the stop has service by *any* trip on a day, the stop then has service.
+        """
+        df = self.sedf.join(
+            self._df_svc, on="stop_id", how="left"
+        ).spatial.set_geometry("SHAPE", inplace=False)
+        return df
+
+    def _add_agency(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = (
+            df.join(
+                self.parent._crosstab_stop_agency.set_index("stop_id"),
+                on="stop_id",
+                how="outer",
+            )
+            .join(
+                self.parent.agency.data.set_index("agency_id"),
+                on="agency_id",
+                how="left",
+            )
+            .sort_values(["stop_id", "agency_name"])
+            .reset_index(drop=True)
+        )
+        return df
+
+    @cached_property
+    def data_with_agency(self) -> pd.DataFrame:
+        """
+        Stops data frame with agency id and name. Since multiple agencies can serve a single stop, stops may be
+        listed more than once.
+        """
+        df = self._add_agency(self.data)
+        return df
+
+    @cached_property
+    def sedf_with_agency(self) -> pd.DataFrame:
+        """
+        Stops spatially enabled data frame with agency id and name. Since multiple agencies can serve a single stop,
+        stops may be listed more than once.
+        """
+        df = self._add_agency(self.sedf).spatial.set_geometry("SHAPE", inplace=False)
+        return df
+
+    @cached_property
+    def data_with_calendar_agency(self) -> pd.DataFrame:
+        """Stops data frame with service days from calendar, and data from agency."""
+        df = self._add_agency(self.data_with_calendar)
+        return df
+
+    @cached_property
+    def sedf_with_calendar_agency(self) -> pd.DataFrame:
+        """Stops spatially enabled data frame with service days from calendar, and data from agency."""
+        df = self._add_agency(self.sedf_with_calendar)
         return df
 
 
@@ -438,6 +550,7 @@ class GtfsStopTimes(GtfsFile):
         source: Path,
         all_columns: Optional[bool] = True,
         infer_missing: Optional[bool] = False,
+        parent: Optional["GtfsDataset"] = None,
     ) -> None:
         """
         Args:
@@ -445,7 +558,7 @@ class GtfsStopTimes(GtfsFile):
             all_columns: Whether desired to return all columns when reading data or not.
             infer_missing: Whether to infer missing arrival and departure values when reading data or not.
         """
-        super().__init__(source, all_columns)
+        super().__init__(source, all_columns=all_columns, parent=parent)
         self.infer_missing = infer_missing
 
     @cached_property
@@ -479,6 +592,25 @@ class GtfsTrips(GtfsFile):
         "wheelchair_accessible",
         "bikes_allowed",
     ]
+
+    @cached_property
+    def sedf(self):
+        if self.parent is None:
+            raise ValueError(
+                "Cannot detect parent GtfsDataset, so cannot retrieve shapes for the Spatially Enabled Dataframe."
+            )
+
+        else:
+            df = (
+                self.data.join(
+                    self.parent.shapes.sedf.set_index("shape_id"),
+                    on="shape_id",
+                    how="left",
+                )
+                .reset_index(drop=True)
+                .spatial.set_geometry("SHAPE", inplace=False)
+            )
+        return df
 
 
 class GtfsDataset(object):
@@ -514,8 +646,9 @@ class GtfsDataset(object):
             self.required_files = [
                 "agency.txt",
                 "calendar.txt",
-                "calendar_dates.txt",
+                # "calendar_dates.txt",
                 "routes.txt",
+                "shapes.txt",
                 "stops.txt",
                 "stop_times.txt",
                 "trips.txt",
@@ -534,13 +667,16 @@ class GtfsDataset(object):
         self._stop_times_pth = self.gtfs_folder / "stop_times.txt"
         self._trips_pth = self.gtfs_folder / "trips.txt"
 
+        # ensure required files are present
+        self.validate_files(self.infer_calendar)
+
     def __repr__(self):
         return f"GtfsDataset: {self.gtfs_folder}"
 
     @cached_property
     def agency(self) -> GtfsAgency:
         """Agency data from GTFS file."""
-        agency = GtfsAgency(self._agency_pth)
+        agency = GtfsAgency(self._agency_pth, parent=self)
         return agency
 
     @cached_property
@@ -556,7 +692,7 @@ class GtfsDataset(object):
         """
         # if calendar.txt is present in this dataset
         if self._calendar_pth.exists():
-            calendar = GtfsCalendar(self._calendar_pth)
+            calendar = GtfsCalendar(self._calendar_pth, parent=self)
 
         # if calendar.txt does not exist, infer from calendar-dates.txt if desired
         elif self.infer_calendar and self._calendar_dates_pth.exists():
@@ -568,7 +704,7 @@ class GtfsDataset(object):
             raw_df = get_calendar_from_calendar_dates(self.calendar_dates.data)
 
             # build calendar from the inferred raw data
-            calendar = GtfsCalendar(raw_df)
+            calendar = GtfsCalendar(raw_df, parent=self)
 
         else:
             raise FileNotFoundError(
@@ -580,31 +716,31 @@ class GtfsDataset(object):
     @cached_property
     def calendar_dates(self) -> GtfsCalendarDates:
         """Calendar dates data from GTFS file."""
-        calendar_dates = GtfsCalendarDates(self._calendar_dates_pth)
+        calendar_dates = GtfsCalendarDates(self._calendar_dates_pth, parent=self)
         return calendar_dates
 
     @cached_property
     def frequencies(self) -> GtfsFrequencies:
         """Frequencies data from GTFS file."""
-        frequencies = GtfsFrequencies(self._frequencies_pth)
+        frequencies = GtfsFrequencies(self._frequencies_pth, parent=self)
         return frequencies
 
     @cached_property
     def routes(self) -> GtfsRoutes:
         """Routes data from GTFS file."""
-        routes = GtfsRoutes(self._routes_pth)
+        routes = GtfsRoutes(self._routes_pth, parent=self)
         return routes
 
     @cached_property
     def shapes(self) -> GtfsShapes:
         """Shapes data from GTFS file."""
-        shapes = GtfsShapes(self._shapes_pth)
+        shapes = GtfsShapes(self._shapes_pth, parent=self)
         return shapes
 
     @cached_property
     def stops(self) -> GtfsStops:
         """Stops data from GTFS file."""
-        stops = GtfsStops(self._stops_pth)
+        stops = GtfsStops(self._stops_pth, parent=self)
         return stops
 
     @cached_property
@@ -620,14 +756,14 @@ class GtfsDataset(object):
 
         """
         stop_times = GtfsStopTimes(
-            self._stop_times_pth, infer_missing=self.infer_stop_times
+            self._stop_times_pth, infer_missing=self.infer_stop_times, parent=self
         )
         return stop_times
 
     @cached_property
     def trips(self) -> GtfsTrips:
         """Trips data from GTFS file."""
-        trips = GtfsTrips(self._trips_pth)
+        trips = GtfsTrips(self._trips_pth, parent=self)
         return trips
 
     @classmethod
@@ -777,7 +913,7 @@ class GtfsDataset(object):
         return df
 
     @cached_property
-    def crosstab_stop_service(self) -> pd.DataFrame:
+    def _crosstab_stop_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
         between stops and calendar."""
         df = self._crosstab_stop_trip.join(
@@ -795,70 +931,4 @@ class GtfsDataset(object):
             .drop_duplicates()
             .reset_index(drop=True)
         )
-        return df
-
-    @cached_property
-    def stops_with_calendar(self) -> pd.DataFrame:
-        """
-        Stops with service days from calendar added. Since multiple trips (and routes) service a single stop, if the
-        stop has service by *any* trip on a day, the stop then has service.
-        """
-        df_svc = (
-            self.crosstab_stop_service.join(
-                self.calendar.data.set_index("service_id"), on="service_id", how="outer"
-            )
-            .drop(columns=["service_id", "start_date", "end_date"])
-            .groupby("stop_id")
-            .any()
-            .astype("Int64")
-        )
-
-        df = self.stops.data.join(df_svc, on="stop_id", how="left")
-        return df
-
-    @cached_property
-    def stops_with_agency(self) -> pd.DataFrame:
-        """
-        Stops data frame with agency id and name. Since multiple agencies can serve a single stop, stops may be
-        listed more than once.
-        """
-        df = (
-            self.stops.data.join(
-                self._crosstab_stop_agency.set_index("stop_id"),
-                on="stop_id",
-                how="outer",
-            )
-            .join(self.agency.data.set_index("agency_id"), on="agency_id", how="left")
-            .sort_values(["stop_id", "agency_name"])
-            .reset_index(drop=True)
-        )
-        return df
-
-    @cached_property
-    def routes_sedf(self) -> pd.DataFrame:
-        """
-        Routes with geometry from shapes as a Spatially Enabled Data Frame.
-        """
-        df = (
-            self.routes.data.join(
-                self._crosstab_shape_route.set_index("route_id"),
-                on="route_id",
-                how="left",
-            )
-            .join(self.shapes.sedf.set_index("shape_id"), on="shape_id", how="left")
-            .reset_index(drop=True)
-            .spatial.set_geometry("SHAPE", inplace=False)
-        )
-
-        return df
-
-    @cached_property
-    def trips_sedf(self) -> pd.DataFrame:
-        """
-        Trips with geometry from shapes as a Spatially Enabled Data Frame.
-        """
-        df = self.trips.data.join(
-            self.shapes.sedf.set_index("shape_id"), on="shape_id", how="left"
-        ).spatial.set_geometry("SHAPE", inplace=False)
-
         return df

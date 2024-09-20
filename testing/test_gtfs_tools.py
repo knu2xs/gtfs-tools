@@ -69,7 +69,7 @@ class TestGtfsDatasets:
         assert isinstance(df, pd.DataFrame)
 
         # for the two properties with spatial, ensure spatially enabled data frame is available and valid
-        if gtfs_prop in ["shapes", "stops"]:
+        if file_property in ["shapes", "stops", "trips", "routes"]:
             sedf = getattr(gtfs_prop, "sedf")
             assert sedf.spatial.validate()
 
