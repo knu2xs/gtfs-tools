@@ -27,8 +27,8 @@ sys.path.insert(0, os.path.abspath("../../src"))
 
 # -- Project information -----------------------------------------------------
 
-project = "gtfs-tools"
-copyright = "2023, Joel McCune (https://github.com/knu2xs)"
+project = "GTFS-Tools"
+copyright = "2024, Joel McCune (https://github.com/knu2xs)"
 author = "Joel McCune (https://github.com/knu2xs)"
 
 # The full version, including alpha/beta/rc tags

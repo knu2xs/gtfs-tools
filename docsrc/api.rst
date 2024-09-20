@@ -2,7 +2,8 @@ GTFS-Tools API
 ***************
 
 The foundation for GTFS-Tools is the :py:class:`gtfs_tools.gtfs.GtfsDataset` object. The properties representing
-each of the GTFS tables represented is a subclass of :py:class:`gtfs_tools.gtfs.GtfsFile`.
+each of the GTFS tables represented is a subclass of :py:class:`gtfs_tools.gtfs.GtfsFile`. Of these, likely the most
+useful are :py:class:`gtfs_tools.gtfs.GtfsStops` and :py:class:`gtfs_tools.gtfs.GtfsRoutes`.
 
 .. automodule:: gtfs_tools
     :members:

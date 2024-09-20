@@ -615,7 +615,28 @@ class GtfsTrips(GtfsFile):
 
 class GtfsDataset(object):
     """
-    GTFS dataset with ingestion and processing capabilities.
+    Object with ingestion and processing capabilities for working with a GTFS dataset, the starting point for working
+    with GTFS data.
+
+    .. code-block:: python
+
+        import pathlib as Path
+        from gtfs_tools.gtfs import GtfsDataset
+
+        # path to directory with a gtfs dataset
+        gtfs_pth = Path(r"D:\\data\\agency_gtfs")
+
+        # create the GtfsDataset instance
+        gtfs = GtfsDataset(gtfs_pth)
+
+        # ensure all required files are included
+        gtfs.validate()
+
+        # get a spatially enabled dataframe of all stops with the agency added
+        stops_df = gtfs.stops.sedf_with_agency
+
+        # get a spatially enabled dataframe of all routes
+        routes_df = gtfs.routes.sedf
     """
 
     def __init__(
@@ -631,7 +652,7 @@ class GtfsDataset(object):
             infer_stop_times: Whether to infer stop times, missing arrival and departure times.
             infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
             required_files: List of files required for the GTFS dataset. By default, these include ``[ "agency.txt",
-                "calendar.txt", "routes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]``
+                "calendar.txt", "routes.txt", "shapes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]``
         """
         # ensure the directory is a path
         if isinstance(gtfs_folder, str):
@@ -668,7 +689,7 @@ class GtfsDataset(object):
         self._trips_pth = self.gtfs_folder / "trips.txt"
 
         # ensure required files are present
-        self.validate_files(self.infer_calendar)
+        self.validate(self.infer_calendar)
 
     def __repr__(self):
         return f"GtfsDataset: {self.gtfs_folder}"
@@ -809,7 +830,7 @@ class GtfsDataset(object):
 
         return output_directory
 
-    def validate_files(self, calendar_or_calendar_dates: Optional[bool] = True) -> bool:
+    def validate(self, calendar_or_calendar_dates: Optional[bool] = True) -> bool:
         """
         Ensure all necessary files are present. Required files are determined by the ``required_files`` construction
         parameter.
