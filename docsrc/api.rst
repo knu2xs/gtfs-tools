@@ -56,7 +56,17 @@ gtfs_tools.gtfs
 gtfs_tools.utils
 =================
 
-These utilities are included by default to speed up the development process.
+Utilities included to speed up the development and creation of build scripts.
 
 .. automodule:: gtfs_tools.utils
     :members:
+
+gtfs_tools.utils.gtfs
+======================
+
+Utility functions specific to working with GTFS data.
+
+.. automodule:: gtfs_tools.utils.gtfs
+    :members:
+
+.. _Spatially enabled data frame: https://developers.arcgis.com/python/api-reference/arcgis.features.toc.html#geoaccessor

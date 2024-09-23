@@ -1,14 +1,16 @@
 import datetime
 import logging
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
 __all__ = [
     "get_calendar_from_calendar_dates",
     "get_gtfs_directories",
-    "get_route_types",
+    "get_route_types_lookup",
     "interpolate_stop_times",
+    "standardize_route_types",
 ]
 
 
@@ -17,7 +19,7 @@ def get_gtfs_directories(parent_dir: Path) -> list[Path]:
     Get a list of GTFS directories below a parent directory.
 
     .. note::
-        This is based on searching for the required agency.txt file. Consequently, if this is missing,
+        This is based on searching for the required ``agency.txt`` file. Consequently, if this is missing,
         the GTFS directory will not be detected.
 
     Args:
@@ -34,7 +36,7 @@ def get_gtfs_directories(parent_dir: Path) -> list[Path]:
 
 
 def interpolate_stop_times(stop_times_df: pd.DataFrame) -> pd.DataFrame:
-    """Helper to preprocess stop times arrival and departure columns before validation handling over 24 hours caveat."""
+    """Helper to preprocess stop times' arrival and departure columns by handling missing values."""
 
     # flag for providing interpolation messaging
     stop_times_cnt = len(stop_times_df.index)
@@ -113,7 +115,7 @@ def get_calendar_from_calendar_dates(calendar_dates: pd.DataFrame) -> pd.DataFra
     Infer a calendar data frame from the calendar dates.
 
     Args:
-        calendar_dates: Data frame created from calendar_dates.txt.
+        calendar_dates: Data frame created from ``calendar_dates.txt``.
     """
     # only use exception type 1, when they are open
     calendar_dates = calendar_dates[calendar_dates["exception_type"] == 1]
@@ -187,18 +189,48 @@ def get_calendar_from_calendar_dates(calendar_dates: pd.DataFrame) -> pd.DataFra
     return df_cal
 
 
-def get_route_types() -> pd.DataFrame:
+def get_route_types_lookup() -> pd.DataFrame:
     """Get a route types dataframe with translations between european codes and standard GTFS route type codes."""
     # create a data frame of descriptions for the route types
-    _route_type_pth = (
+    route_type_pth = (
         Path(__file__).parent.parent / "assets" / "gtfs_modality_translation.csv"
     )
 
     route_type_df = pd.read_csv(
-        filepath_or_buffer=_route_type_pth,
-        names=["route_type", "route_type_desc", "route_type_carto"],
-        dtype={"route_type": str, "route_type_desc": str, "route_type_carto": str},
+        filepath_or_buffer=route_type_pth,
+        names=["route_type", "route_type_desc", "route_type_gtfs"],
+        dtype={"route_type": str, "route_type_desc": str, "route_type_gtfs": str},
         index_col="route_type",
     )
 
     return route_type_df
+
+
+def standardize_route_types(
+    input_dataframe: pd.DataFrame, route_type_column: Optional[str] = "route_type"
+) -> pd.DataFrame:
+    """
+    Replace any non-standard route types with standard GTFS route type codes.
+
+    Args:
+        input_dataframe: Data frame with route types to be standardized.
+        route_type_column: Colum with route_types to be standardized. Defaults to ``route_types```.
+    """
+    # ensure the route type column exists in the input data
+    if route_type_column not in input_dataframe.columns:
+        raise ValueError(
+            rf"The input dataframe does not contain the route_type column, {route_type_column}."
+        )
+
+    # get the crosstabs table
+    lookup_df = get_route_types_lookup()[["route_type"]].rename(
+        {"route_type_gtfs": route_type_column}, axis=1
+    )
+
+    # rename the existing column
+    df = input_dataframe.rename(columns={route_type_column: "type_replace"})
+
+    # join the lookup and drop the old
+    out_df = df.join(lookup_df, on="type_replace", how="left")
+
+    return out_df

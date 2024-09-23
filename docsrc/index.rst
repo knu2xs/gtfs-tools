@@ -14,3 +14,4 @@ Contents
 
     GTFS Overview and Loading Logic<gtfs>
     GTFS-Tools API<api>
+    Transit Index Factors Notebook<notebooks/transit_index_factors>

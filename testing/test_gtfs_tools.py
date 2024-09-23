@@ -37,6 +37,13 @@ file_properties = [
 ]
 
 
+def test_gtfs_dataset_from_zip():
+    zip_pth = Path(r"D:\scratch\gtfs-tools\data\raw\test_nested_zip\gtfs.zip")
+    gtfs = gtfs_tools.gtfs.GtfsDataset.from_zip(zip_pth)
+    assert isinstance(gtfs, gtfs_tools.gtfs.GtfsDataset)
+    assert gtfs.agency.file_path.exists()
+
+
 class TestGtfsDatasets:
     # all the gtfs datasets to test
     gtfs_parent = dir_raw / "gtfs_msp_cbsa"
