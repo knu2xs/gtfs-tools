@@ -32,7 +32,7 @@ copyright = "2024, Joel McCune (https://github.com/knu2xs)"
 author = "Joel McCune (https://github.com/knu2xs)"
 
 # The full version, including alpha/beta/rc tags
-release = "0.2.0.dev1"
+release = "0.2.0"
 
 # -- Copying notebooks for inclusion -----------------------------------------
 prj_dir = os.path.abspath("../")
