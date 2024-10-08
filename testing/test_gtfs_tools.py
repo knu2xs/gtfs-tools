@@ -37,11 +37,67 @@ file_properties = [
 ]
 
 
-def test_gtfs_dataset_from_zip():
-    zip_pth = Path(r"D:\scratch\gtfs-tools\data\raw\test_nested_zip\gtfs.zip")
-    gtfs = gtfs_tools.gtfs.GtfsDataset.from_zip(zip_pth)
+def test_gtfs_init():
+    pth = dir_raw / "gtfs_olympia" / "mdb_source_id=268"
+    gtfs = gtfs_tools.gtfs.GtfsDataset(pth, standardize_route_types=True)
     assert isinstance(gtfs, gtfs_tools.gtfs.GtfsDataset)
-    assert gtfs.agency.file_path.exists()
+
+
+def test_stops_data():
+    pth = dir_raw / "gtfs_olympia" / "mdb_source_id=268"
+    gtfs = gtfs_tools.gtfs.GtfsDataset(pth, standardize_route_types=True)
+    stops = gtfs.stops
+    assert isinstance(stops, gtfs_tools.gtfs.GtfsStops)
+    stops_df = stops.data
+    assert isinstance(stops_df, pd.DataFrame)
+    stops_sedf = stops.sedf
+    assert stops_sedf.spatial.validate()
+
+
+class TestGtfsNL:
+    @pytest.fixture(scope="class")
+    def gtfs_source(self):
+        gtfs_pth = Path(
+            r"\\devba00007\data\gtfs_publishing\interim_quarantine\Esri_NL_gtfsnlzip_2024-08-13_16_01\gtfs"
+        )
+        gtfs = gtfs_tools.gtfs.GtfsDataset(gtfs_pth)
+        return gtfs
+
+    def test_gtfs_stop_modalities(self, gtfs_source):
+        assert isinstance(gtfs_source.stops, gtfs_tools.gtfs.GtfsStops)
+        modalities_df = gtfs_source.stops.modalities
+        assert modalities_df[modalities_df["route_type"].isnull()].shape[0] <= 45
+
+    def test_gtfs_stop_agency(self, gtfs_source):
+        assert isinstance(gtfs_source.stops, gtfs_tools.gtfs.GtfsStops)
+        agency_df = gtfs_source.stops.agency
+        assert agency_df[agency_df["agency_name"].isnull()].shape[0] == 0
+
+    def test_gtfs_route_read_agency_id(self, gtfs_source):
+        route_df = gtfs_source.routes.data
+        assert ~route_df["agency_id"].isnull().any()
+
+
+class TestGtfsAddLookupColumns:
+    @pytest.fixture(scope="class")
+    def gtfs_source(self):
+        gtfs_pth = Path(
+            r"\\DevBA00007\data\gtfs_publishing\interim\Grand_County_Colorado_Bus_winterparkcousgtfszip_2024-06-19_10_43_48\gtfs"
+        )
+        gtfs = gtfs_tools.gtfs.GtfsDataset(gtfs_pth)
+        return gtfs
+
+    def test_add_agency_route(self, gtfs_source):
+        routes_df = routes_df = gtfs_tools.utils.gtfs.add_agency_name_column(
+            gtfs_source.routes.data, gtfs_source.agency.data
+        )
+        assert routes_df["agency_name"].notnull().all()
+
+    def test_add_modality_std_routes(self, gtfs_source):
+        routes_df = gtfs_tools.utils.gtfs.add_standarized_modality_column(
+            gtfs_source.routes.data
+        )
+        assert routes_df["route_type_std"].notnull().all()
 
 
 class TestGtfsDatasets:

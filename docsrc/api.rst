@@ -69,4 +69,10 @@ Utility functions specific to working with GTFS data.
 .. automodule:: gtfs_tools.utils.gtfs
     :members:
 
-.. _Spatially enabled data frame: https://developers.arcgis.com/python/api-reference/arcgis.features.toc.html#geoaccessor
+gtfs_tools.utils.validation
+============================
+
+Functions for validating GTFS data.
+
+.. automodule:: gtfs_tools.utils.validation
+    :members:

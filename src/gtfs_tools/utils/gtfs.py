@@ -1,14 +1,21 @@
 import datetime
 import logging
+import math
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterable
 
+import numpy as np
 import pandas as pd
 
 __all__ = [
+    "add_agency_name_column",
+    "add_location_descriptions",
+    "add_modality_descriptions",
+    "add_standarized_modality_column",
+    "calculate_headway",
     "get_calendar_from_calendar_dates",
     "get_gtfs_directories",
-    "get_route_types_lookup",
+    "get_route_types_table",
     "interpolate_stop_times",
     "standardize_route_types",
 ]
@@ -189,19 +196,26 @@ def get_calendar_from_calendar_dates(calendar_dates: pd.DataFrame) -> pd.DataFra
     return df_cal
 
 
-def get_route_types_lookup() -> pd.DataFrame:
-    """Get a route types dataframe with translations between european codes and standard GTFS route type codes."""
-    # create a data frame of descriptions for the route types
-    route_type_pth = (
-        Path(__file__).parent.parent / "assets" / "gtfs_modality_translation.csv"
-    )
+# variable to cache route types table
+_route_types_df = None
 
-    route_type_df = pd.read_csv(
-        filepath_or_buffer=route_type_pth,
-        names=["route_type", "route_type_desc", "route_type_gtfs"],
-        dtype={"route_type": str, "route_type_desc": str, "route_type_gtfs": str},
-        index_col="route_type",
-    )
+
+def get_route_types_table() -> pd.DataFrame:
+    """Get a route types dataframe with translations between european codes and standard GTFS route type codes."""
+    if _route_types_df is None:
+        # create a data frame of descriptions for the route types
+        route_type_pth = (
+            Path(__file__).parent.parent / "assets" / "gtfs_modality_translation.csv"
+        )
+
+        route_type_df = pd.read_csv(
+            filepath_or_buffer=route_type_pth,
+            names=["route_type", "route_type_desc", "route_type_gtfs"],
+            dtype={"route_type": str, "route_type_desc": str, "route_type_gtfs": str},
+        )
+
+    else:
+        route_type_df = _route_types_df
 
     return route_type_df
 
@@ -223,7 +237,7 @@ def standardize_route_types(
         )
 
     # get the crosstabs table
-    lookup_df = get_route_types_lookup()[["route_type"]].rename(
+    lookup_df = get_route_types_table()[["route_type"]].rename(
         {"route_type_gtfs": route_type_column}, axis=1
     )
 
@@ -234,3 +248,243 @@ def standardize_route_types(
     out_df = df.join(lookup_df, on="type_replace", how="left")
 
     return out_df
+
+
+def calculate_headway(stop_times_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate the headway in minutes for each stop time in the stop_times dataframe.
+
+    Args:
+        stop_times_df: Stop times data frame.
+    """
+    # sort data by stop and arrival time, yielding a sequential list of arrivals for each stop
+    col_lst = ["stop_id", "arrival_time"]
+    sorted_df = stop_times_df.sort_values(col_lst).loc[:, col_lst]
+
+    # add an incremental counter by stop; enables identifying first stop
+    sorted_df["trip_idx"] = sorted_df.groupby("stop_id").cumcount() + 1
+
+    # get the headway by getting the difference from the previous row to the current row
+    sorted_df["headway"] = sorted_df["arrival_time"].diff()
+
+    # remove the first trip from each stop (no previous value to calculate headway from) and zero values (when
+    # two trips arrive at the same time)
+    headway_df = sorted_df.loc[
+        (sorted_df["trip_idx"] != 1) & (sorted_df["headway"] > pd.Timedelta(0)),
+        ["stop_id", "arrival_time", "headway"],
+    ]
+
+    # convert headway to decimal minutes
+    headway_df["headway"] = headway_df["headway"].apply(
+        lambda td: td.total_seconds() / 60
+    )
+
+    return headway_df
+
+
+def get_description_from_id(
+    lookup_dataframe: pd.DataFrame,
+    id_string: str,
+    id_column: str,
+    description_column: str,
+    description_separator: str = ", ",
+) -> str:
+    # handle potentially other data types being shoved in
+    if not isinstance(id_string, str) and id_string is not None:
+        if math.isnan(id_string):
+            id_string = None
+
+        elif not math.isnan(id_string):
+            if isinstance(id_string, float):
+                id_string = int(id_string)
+
+            elif isinstance(id_string, int):
+                id_string = str(id_string)
+
+    # only go to the effort if there is something to work with
+    if id_string is None:
+        std_str = None
+
+    # make sure a zero length string is simply none
+    elif len(id_string.replace(" ", "")) == 0:
+        std_str = None
+    else:
+        # get the lookup table
+        lookup = lookup_dataframe.set_index(id_column)[description_column]
+
+        # ensure agency id is a string
+        if not isinstance(id_string, str):
+            id_string = str(id_string)
+
+        # get the individual agency ids from the comma separated values (eval enables processing quote enclosed strings)
+        id_eval = eval(id_string)
+
+        # now, rebuild back into list of strings
+        if isinstance(id_eval, Iterable):
+            id_lst = map(str, id_eval)
+        else:
+            id_lst = [str(id_eval)]
+
+        # create a set of the route type standard codes to avoid duplicates, then convert to list for sorting
+        std_lst = list(set(lookup.get(id) for id in id_lst))
+
+        # combine descriptions into comma separated string
+        std_str = description_separator.join(std_lst)
+
+    return std_str
+
+
+def add_description_column_from_id_column(
+    data: pd.DataFrame,
+    lookup_dataframe: pd.DataFrame,
+    lookup_id_column: str,
+    lookup_description_column: str,
+    id_column: str,
+    description_column: str,
+    description_separator: str = ", ",
+) -> pd.DataFrame:
+    # ensure id column exists
+    if id_column not in data.columns:
+        raise ValueError(f"The dataframe does not contain the {id_column} column.")
+
+    # ascertain if spatially enable dataframe or not
+    spatial = data.spatial.validate()
+    geom_col = data.spatial.name
+
+    # make a copy so original data is not altered
+    df = data.copy(deep=True)
+
+    # populate the description column
+    df[description_column] = df[id_column].apply(
+        lambda id_val: get_description_from_id(
+            lookup_dataframe,
+            id_string=id_val,
+            id_column=lookup_id_column,
+            description_column=lookup_description_column,
+            description_separator=description_separator,
+        )
+    )
+
+    # if data originally spatial, re-enable it
+    if spatial:
+        df.spatial.set_geometry(geom_col, inplace=True)
+
+    return df
+
+
+def add_agency_name_column(
+    data: pd.DataFrame,
+    agency_df: pd.DataFrame,
+    agency_id_column: Optional[str] = "agency_id",
+    agency_name_column: Optional[str] = "agency_name",
+) -> pd.DataFrame:
+    """
+    Add a standardized modality column to data frame. Some datasets can contain modality codes utilizing a much more
+    detailed European standard for transit types. If a much more succinct coding is needed following the GTFS
+    standard, this function will add a column with standardized modality codes.
+
+    Args:
+        data: Pandas data frame with a column containing agency identifiers.
+        agency_df: Pandas data frame with agency identifiers and associated agency names.
+        agency_id_column: Column containing agency identifiers. Default is ``agency_id``.
+        agency_name_column: Column to be added with agency names. Default is ``agency_name``.
+    """
+    df = add_description_column_from_id_column(
+        data,
+        lookup_dataframe=agency_df,
+        lookup_id_column="agency_id",
+        lookup_description_column="agency_name",
+        id_column=agency_id_column,
+        description_column=agency_name_column,
+    )
+    return df
+
+
+def add_standarized_modality_column(
+    data: pd.DataFrame,
+    modality_column: Optional[str] = "route_type",
+    standardized_modality_column: Optional[str] = "route_type_std",
+) -> pd.DataFrame:
+    """
+    Add a standardized modality column to data frame. Some datasets can contain modality codes utilizing a much more
+    detailed European standard for transit types. If a much more succicinct coding is needed following the GTFS
+    standard, this function will add a column with standardized modality codes.
+    Args:
+        data: Pandas data frame with a column containing modality codes.
+        modality_column: Column containing modality codes. Default is ``route_type``.
+        standardized_modality_column: Column to be added with standardized route codes. Default is ``route_type_std``.
+    """
+    df = add_description_column_from_id_column(
+        data,
+        lookup_dataframe=get_route_types_table(),
+        lookup_id_column="route_type",
+        lookup_description_column="route_type_gtfs",
+        id_column=modality_column,
+        description_column=standardized_modality_column,
+        description_separator=",",
+    )
+    return df
+
+
+def add_modality_descriptions(
+    data: pd.DataFrame,
+    modality_codes_column: Optional[str] = "route_type",
+    description_column: Optional[str] = "route_type_desc",
+) -> pd.DataFrame:
+    """
+    Add a string column with modality descriptions looked up from modality types.
+
+    Args:
+        data: Pandas data frame with a column containing modality codes.
+        modality_codes_column: Column containing modality codes. Default is ``route_type``.
+        description_column: Column to be added with route type descriptions. Default is ``route_type_desc``.
+    """
+    df = add_description_column_from_id_column(
+        data,
+        lookup_dataframe=get_route_types_table(),
+        lookup_id_column="route_type",
+        lookup_description_column="route_type_desc",
+        id_column=modality_codes_column,
+        description_column=description_column,
+        description_separator=",",
+    )
+    return df
+
+
+def add_location_descriptions(
+    data: pd.DataFrame,
+    location_codes_column: Optional[str] = "location_type",
+    location_description_column: Optional[str] = "esri_location_type_desc",
+) -> pd.DataFrame:
+    """
+    Add a string column with location descriptions looked up from location types.
+
+    Args:
+        data: Pandas data frame with a column containing location codes.
+        location_codes_column: Column with location codes. Default is ``location_type``.
+        location_description_column: Column to be added with location type descriptions. Default is
+            ``esri_location_type_desc``.
+    """
+    # create a data frame for looking up
+    location_type_df = pd.DataFrame(
+        data=[
+            ["0", "stop"],
+            ["1", "station"],
+            ["2", "entrance or exit"],
+            ["3", "generic node"],
+            ["4", "boarding area"],
+        ],
+        columns=["location_type", "location_type_desc"],
+    )
+
+    df = add_description_column_from_id_column(
+        data,
+        lookup_dataframe=location_type_df,
+        lookup_id_column="location_type",
+        lookup_description_column="location_type_desc",
+        id_column=location_codes_column,
+        description_column=location_description_column,
+        description_separator=", ",
+    )
+
+    return df

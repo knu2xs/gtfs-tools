@@ -1,10 +1,11 @@
-import logging
-import tempfile
-import zipfile
 from functools import cached_property
+import logging
 from pathlib import Path
+import tempfile
 from typing import Optional, Union
+import zipfile
 
+import numpy as np
 from arcgis.features import GeoAccessor
 from arcgis.geometry import Point, Polyline
 import pandas as pd
@@ -16,8 +17,14 @@ from .utils.gtfs import (
     interpolate_stop_times,
     get_gtfs_directories,
     standardize_route_types as std_rt_typs,
+    calculate_headway,
 )
 from .utils.pandas import replace_zero_and_space_strings_with_nulls
+from .utils.validation import (
+    validate_required_files,
+    validate_modality_codes,
+    validate_stop_rows,
+)
 
 __all__ = [
     "GtfsAgency",
@@ -155,13 +162,13 @@ class GtfsFile(object):
         # for each column in the source data, only add the column to dtype if present in source
         for col in self.file_columns:
             if col in self.string_columns:
-                dtype[col] = str
+                dtype[col] = "O"
 
             elif col in self.integer_columns or col in self.boolean_columns:
                 dtype[col] = "Int64"
 
             elif col in self.float_columns:
-                dtype[col] = float
+                dtype[col] = "Float64"
 
         return dtype
 
@@ -351,8 +358,7 @@ class GtfsRoutes(GtfsFile):
     """Routes GTFS file."""
 
     required_columns = ["route_id", "route_type"]
-    string_columns = ["route_id", "agency_id"]
-    integer_columns = ["route_type"]
+    string_columns = ["route_id", "agency_id", "route_type"]
     _use_columns = ["route_id", "route_type", "agency_id"]
 
     def __init__(
@@ -373,17 +379,44 @@ class GtfsRoutes(GtfsFile):
         self.standardize_route_types = standardize_route_types
 
     @cached_property
+    def _raw_df(self) -> pd.DataFrame:
+        return self._read_source(self.all_columns)
+
+    def validate(self, enforce_gtfs_strict: Optional[bool] = False):
+        """
+        Run validation on routes data.
+
+        * ensure modality codes (``route_type``) are valid values
+
+        Args:
+            enforce_gtfs_strict: Whether to use the strict interpretation of modality codes defined in the GTFS
+                specification, or whether to allow the expanded European codes. The default is ``False``, to allow the
+                European codes as well.
+
+        """
+        valid = validate_modality_codes(
+            self._raw_df,
+            modality_codes_column="route_type",
+            enforce_gtfs_strict=enforce_gtfs_strict,
+        )
+
+    @cached_property
     def data(self) -> pd.DataFrame:
         """Pandas data frame of the file data."""
+        # validate the input data
+        self.validate(enforce_gtfs_strict=False)
 
         # get the data frame
-        df = self._read_source(self.all_columns)
+        df = self._raw_df
 
-        # if the agency id column is not in the input, add it from the agency table if possible
-        if "agency_id" not in df.columns and self.parent is not None:
-            df["agency_id"] = self.parent.agency.data.loc[0, "agency_id"]
-        else:
+        # if the agency id column is not in the input, add it
+        if "agency_id" not in df.columns:
             df["agency_id"] = pd.Series(dtype=str)
+
+        # if the agency_id is null, try to populate from the agency table...possible if only one agency
+        if isinstance(self.parent, GtfsDataset):
+            if self.parent.agency.data.shape[0] == 1:
+                df["agency_id"] = self.parent.agency.data.loc[0, "agency_id"]
 
         # if desired to standardize the route types, do so
         if self.standardize_route_types:
@@ -453,16 +486,50 @@ class GtfsStops(GtfsFile):
     """Stops GTFS file."""
 
     required_columns = ["stop_lat", "stop_lon", "stop_id"]
-    string_columns = ["stop_id", "parent_station"]
-    integer_columns = ["location_type"]
+    string_columns = [
+        "stop_id",
+        "parent_station",
+        "level_id",
+        "platform_code",
+        "location_type",
+    ]
     float_columns = ["stop_lat", "stop_lon"]
+
+    def _ensure_parent(self) -> None:
+        """Helper to make sure there is a parent"""
+        if self.parent is None:
+            raise ValueError(
+                "A parent GTFS object is required to be able to retrieve stop properties from the routes."
+            )
+
+    @cached_property
+    def _valid_and_invalid_data(self) -> pd.DataFrame():
+        """Helper to read and run data through validation."""
+        # get the data frame
+        df = self._read_source(self.all_columns)
+
+        # validate to get valid (usable) and invalid rows
+        df, invalid_df = validate_stop_rows(df, enforce_gtfs_strict=False, copy=False)
+
+        # provide notification if invalid rows
+        if len(invalid_df) > 0:
+            logging.warning(
+                f"There are {len(invalid_df):,} unusable stops in the input data, {self.file_path}\nThese "
+                f"invalid records, along with the reason can be accessed through GtfsDataset.stops.invalid_data"
+            )
+
+        return df, invalid_df
+
+    @property
+    def invalid_data(self) -> pd.DataFrame:
+        """Pandas data frame of unusable rows."""
+        return self._valid_and_invalid_data[1]
 
     @cached_property
     def data(self) -> pd.DataFrame:
         """Pandas data frame of the file data."""
-
         # get the data frame
-        df = self._read_source(self.all_columns)
+        df = self._valid_and_invalid_data[0]
 
         # add the parent station column and location type columns if not in the source data
         if "parent_station" not in df.columns:
@@ -507,21 +574,118 @@ class GtfsStops(GtfsFile):
         )
         return df_svc
 
-    def _add_agency(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = (
-            df.join(
-                self.parent._crosstab_stop_agency.set_index("stop_id"),
-                on="stop_id",
-                how="outer",
+    def _retrieve_route_column(self, column_name: str) -> pd.DataFrame:
+        """Helper function to retrieve a data frame of a specific property from the route table."""
+        # make sure there is a parent
+        self._ensure_parent()
+
+        # make sure the column is in the route table
+        if column_name not in self.parent.routes.data.columns:
+            raise ValueError(
+                f"{column_name} column is not present in the routes table."
             )
-            .join(
-                self.parent.agency.data.set_index("agency_id"),
-                on="agency_id",
+
+        # get a data frame of parent identifier, child identifier, and child column to return
+        prnt_chld_df = (
+            self.data[["parent_station", "stop_id"]]
+            .rename(columns={"parent_station": "parent_id"})
+            .merge(self.parent._crosstab_stop_route, on="stop_id", how="left")
+            .merge(
+                self.parent.routes.data[["route_id", column_name]],
+                on="route_id",
                 how="left",
             )
-            .sort_values(["stop_id", "agency_name"])
-            .reset_index(drop=True)
+            .drop(columns=["route_id"])
         )
+
+        # get child column as a comma separated string by parent identifier
+        parent_col_df = (
+            prnt_chld_df[~prnt_chld_df["parent_id"].isnull()]
+            .groupby("parent_id")[column_name]
+            .agg(
+                lambda srs: np.NaN
+                if srs.isnull().all()
+                else ",".join(srs[~srs.isnull()].astype(str).drop_duplicates())
+            )
+            .dropna()
+            .to_frame()
+        )
+
+        # start creating a type data frame starting with the parent column values'
+        col_df = prnt_chld_df.join(
+            parent_col_df, on="stop_id", lsuffix="_orig", how="left"
+        )
+
+        # populate non-parent stop column values, these are the stops with child column originally populated
+        orig_fltr = col_df[column_name].isnull()
+        col_df.loc[orig_fltr, column_name] = col_df.loc[
+            orig_fltr, f"{column_name}_orig"
+        ]
+
+        # now, add a colum with the parent values, values from the parent stop
+        col_df = col_df.join(
+            col_df[["stop_id", column_name]].set_index("stop_id"),
+            on="parent_id",
+            rsuffix="_parent",
+            how="left",
+        )
+
+        # use parent values to fill any records not already populated
+        child_fltr = col_df[column_name].isnull()
+        col_df.loc[child_fltr, column_name] = col_df.loc[
+            child_fltr, f"{column_name}_parent"
+        ]
+
+        # prune the schema to just needed columns
+        col_df = col_df.loc[:, ["stop_id", column_name]].set_index("stop_id")
+
+        # clean up the data frame
+        col_df = col_df.drop_duplicates()
+
+        return col_df
+
+    @cached_property
+    def modalities(self) -> pd.DataFrame:
+        """
+        Get stop modality (``route_type``) for stops. This is a three-step process to get the modality for as many
+        stops as possible.
+
+        Stop modality is looked up by retrieving the ``route_type`` from ``route.txt``. Looking these up requires
+        traversing ``stops > stop_times > trips > routes``. Because of this, parent stations, since they do not have
+        stop times (stop times are assigned to the child stops), the parent stations will not have a  modality. The
+        same is true for many child stops in large train stations, the stops for platforms. After filling as many null
+        ``route_type`` rows as possible by retrieving parent ``route_type``, remaining nulls are attempted to be
+        filled by using ``route_type`` from the parent.
+        """
+        type_df = self._retrieve_route_column("route_type")
+
+        return type_df
+
+    @cached_property
+    def agency(self) -> pd.DataFrame:
+        """
+        Get stop agency information for stops. This is a three-step process to get agency data for as many
+        stops as possible.
+
+        Stop agency data is looked up by retrieving the data from ``agency.txt``. Looking these up requires
+        traversing ``stops > stop_times > trips > routes > agency``. Because of this, parent stations, since they do
+        not have stop times (stop times are assigned to the child stops), the parent stations will not have a  modality.
+        The same is true for many child stops in large train stations, the stops for platforms. After filling as many
+        null ``route_type`` rows as possible by retrieving parent agency data, remaining nulls are attempted to be
+        filled by using agency data from the parent.
+        """
+        # ensure parent exists
+        self._ensure_parent()
+
+        # if there is only one agency, no need to do complicated lookup
+        if len(self.parent.agency.data.index) == 1:
+            df = self.data["stop_id"].to_frame()
+            df["agency_id"] = self.parent.agency.data.loc[0, "agency_id"]
+
+        # otherwise, do the legwork to lookup through the schema...lots of crosstabs lookups
+        else:
+            df = self._retrieve_route_column("agency_id")
+
         return df
 
     @cached_property
@@ -530,7 +694,7 @@ class GtfsStops(GtfsFile):
         Stops data frame with agency id and name. Since multiple agencies can serve a single stop, stops may be
         listed more than once.
         """
-        df = self._add_agency(self.data)
+        df = self.data.join(self.agency, on="stop_id", how="left")
         return df
 
     @cached_property
@@ -651,29 +815,14 @@ class GtfsStopTimes(GtfsFile):
             headway_stats = headway_df.groupby("stop_id").describe()
 
         """
-        # sort data by stop and arrival time, yeilding a sequential list of arrivals for each stop
-        sorted_df = self.data.sort_values(["stop_id", "arrival_time"]).loc[
-            :, ["stop_id", "arrival_time"]
-        ]
-
-        # add an incremental counter by stop; enables identifying first stop
-        sorted_df["trip_idx"] = sorted_df.groupby("stop_id").cumcount() + 1
-
-        # get the headway by getting the difference from the previous row to the current row
-        sorted_df["headway"] = sorted_df["arrival_time"].diff()
-
-        # remove the first trip from each stop (no previous value to calculate headway from) and zero values (when
-        # two trips arrive at the same time)
-        headway_df = sorted_df[
-            (sorted_df["trip_idx"] != 1) & (sorted_df["headway"] > pd.Timedelta(0))
-        ].drop(columns=["arrival_time", "trip_idx"])
+        headway_df = calculate_headway(self.data)
 
         return headway_df
 
     @cached_property
     def headway_stats(self) -> pd.DataFrame:
         """Utility property to quickly get headway descriptive statistics by stop."""
-        headway_stats_df = self.headway.groupby("stop_id").describe()
+        headway_stats_df = self.headway.groupby("stop_id").describe()["headway"]
         return headway_stats_df
 
 
@@ -681,7 +830,13 @@ class GtfsTrips(GtfsFile):
     """Trips GTFS file."""
 
     required_columns = ["trip_id", "route_id", "service_id"]
-    string_columns = ["trip_id", "route_id", "service_id", "shape_id"]
+    string_columns = [
+        "trip_id",
+        "route_id",
+        "trip_short_name",
+        "service_id",
+        "shape_id",
+    ]
     integer_columns = ["wheelchair_accessible", "bikes_allowed"]
     _use_columns = [
         "trip_id",
@@ -739,7 +894,7 @@ class GtfsDataset(object):
 
     def __init__(
         self,
-        gtfs_folder: Path,
+        gtfs_path: Path,
         infer_stop_times: Optional[bool] = True,
         infer_calendar: Optional[bool] = True,
         required_files: Optional[list[str]] = None,
@@ -747,7 +902,7 @@ class GtfsDataset(object):
     ) -> None:
         """
         Args:
-            gtfs_folder: Directory containing GTFS data.
+            gtfs_path: Directory containing GTFS data.
             infer_stop_times: Whether to infer stop times, missing arrival and departure times.
             infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
             required_files: List of files required for the GTFS dataset. By default, these include ``[ "agency.txt",
@@ -756,11 +911,15 @@ class GtfsDataset(object):
                 types to standard GTFS route types.
         """
         # ensure the directory is a path
-        if isinstance(gtfs_folder, str):
-            gtfs_folder = Path(gtfs_folder)
+        if isinstance(gtfs_path, str):
+            gtfs_path = Path(gtfs_path)
+
+        # if the folder is a path to a zipped archive, extract it to a temp directory
+        if gtfs_path.suffix == ".zip":
+            gtfs_path = self.unzip(gtfs_path, Path(tempfile.mkdtemp()))
 
         # save parameters as properties
-        self.gtfs_folder = gtfs_folder
+        self.gtfs_folder = gtfs_path
         self.infer_stop_times = infer_stop_times
         self.infer_calendar = infer_calendar
         self.standardize_route_types = standardize_route_types
@@ -819,7 +978,7 @@ class GtfsDataset(object):
 
         # if calendar.txt does not exist, infer from calendar-dates.txt if desired
         elif self.infer_calendar and self._calendar_dates_pth.exists():
-            logging.debug(
+            logging.warning(
                 "calendar.txt does not exist, so inferring calendar from calendar-dates.txt"
             )
 
@@ -974,117 +1133,117 @@ class GtfsDataset(object):
             calendar_or_calendar_dates: When scanning for files, accept the dataset if ``calendar_dates.txt`` is
                 present, even in the absence of ``calendar.txt``.
         """
-        # pull out the required file names without the extension
-        req_lst = [f.rstrip(".txt") for f in self.required_files]
-
-        # get files present in the dataset directory
-        file_lst = [f.stem for f in self.gtfs_folder.glob("*.txt")]
-
-        # if handling calendar and calendar dates separately
-        if calendar_or_calendar_dates:
-            # check for the presence of the calendar or calendar_dates file
-            for f in file_lst:
-                # if calendar or calendar_dates found
-                if f in ["calendar", "calendar_dates"]:
-                    # update the required files to no longer include calendar
-                    req_lst = [
-                        f for f in file_lst if f not in ["calendar", "calendar_dates"]
-                    ]
-
-        # check for the presence of all required files
-        missing_lst = set(req_lst) - set(file_lst)
-
-        # if there are missing files, then invalid
-        if len(missing_lst) == len(req_lst):
-            valid = False
-            logging.error(
-                f"Cannot locate any required files in the GTFS dataset {self.gtfs_folder.stem}."
-            )
-
-        elif len(missing_lst) > 0:
-            valid = False
-            logging.error(
-                f"GTFS dataset, {self.gtfs_folder.stem}, is missing required files: {missing_lst}"
-            )
-
-        else:
-            valid = True
-            logging.debug(
-                f"GTFS dataset, {self.gtfs_folder.stem}, includes all required files."
-            )
+        valid = validate_required_files(
+            self.gtfs_folder,
+            required_files=self.required_files,
+            calendar_or_calendar_dates=calendar_or_calendar_dates,
+        )
 
         return valid
 
     @cached_property
+    def valid(self):
+        """Alias for ``validate`` accepting default parameters."""
+        return self.validate()
+
+    @cached_property
     def _crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
-        df = self.stop_times.data[["stop_id", "trip_id"]].drop_duplicates()
+        df = self.stop_times.data[["stop_id", "trip_id"]]
+        df = df.drop_duplicates()
         return df
 
     @cached_property
     def _crosstab_trip_route(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
         to routes."""
-        df = self.trips.data[["trip_id", "route_id"]].drop_duplicates()
+        df = self.trips.data[["trip_id", "route_id"]]
+        df = df.drop_duplicates()
         return df
 
     @cached_property
     def _crosstab_trip_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
         trips to calendar."""
-        df = self.trips.data[["trip_id", "service_id"]].drop_duplicates()
+        df = self.trips.data[["trip_id", "service_id"]]
+        df = df.drop_duplicates()
         return df
 
     @cached_property
     def _crosstab_route_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between routes and agencies."""
-        df = self.routes.data[["route_id", "agency_id"]].drop_duplicates()
+        df = self.routes.data[["route_id", "agency_id"]]
+        df = df.drop_duplicates()
         return df
 
     @cached_property
     def _crosstab_stop_route(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and routes."""
-        df = (
-            self._crosstab_stop_trip.join(
-                self._crosstab_trip_route.set_index("trip_id"), on="trip_id", how="left"
-            )[["stop_id", "route_id"]]
-            .drop_duplicates()
-            .reset_index(drop=True)
-        )
+        df = self._crosstab_stop_trip.join(
+            self._crosstab_trip_route.set_index("trip_id"), on="trip_id", how="left"
+        ).loc[:, ["stop_id", "route_id"]]
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
     def _crosstab_stop_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between trips and agency id."""
-        df = (
-            self._crosstab_stop_route.join(
-                self.routes.data[["route_id", "agency_id"]].set_index("route_id"),
-                on="route_id",
-                how="left",
-            )
-            .drop(columns="route_id")
-            .drop_duplicates()
-            .reset_index(drop=True)
-        )
+        df = self._crosstab_stop_route.merge(
+            self.routes.data[["route_id", "agency_id"]],
+            on="route_id",
+            how="left",
+        ).drop(columns="route_id")
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
     def _crosstab_stop_service(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
         between stops and calendar."""
-        df = self._crosstab_stop_trip.join(
-            self._crosstab_trip_service.set_index("trip_id"), on="trip_id"
-        )[["stop_id", "service_id"]].drop_duplicates()
+        df = self._crosstab_stop_trip.merge(self._crosstab_trip_service, on="trip_id")[
+            ["stop_id", "service_id"]
+        ]
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
     def _crosstab_shape_route(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between shapes and routes."""
-        df = (
-            self.trips.data.loc[
-                ~self.trips.data["shape_id"].isnull(), ["shape_id", "route_id"]
-            ]
-            .drop_duplicates()
-            .reset_index(drop=True)
-        )
+        df = self.trips.data.loc[
+            ~self.trips.data["shape_id"].isnull(), ["shape_id", "route_id"]
+        ]
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
+
+    def export(self, gtfs_directory: Union[str, Path]) -> Path:
+        """Export standardized files to a directory."""
+        # make sure the output directory path is a Path
+        if isinstance(gtfs_directory, str):
+            gtfs_directory = Path(gtfs_directory)
+
+        # if it does not exist, create it
+        gtfs_directory.mkdir(exist_ok=True, parents=True)
+
+        # iteratively export files
+        export_lst = [
+            "agency",
+            "calendar",
+            "frequencies",
+            "routes",
+            "shapes",
+            "stops",
+            "stop_times",
+            "trips",
+        ]
+
+        for name in export_lst:
+            # create the path to save the data
+            asset_pth = gtfs_directory / f"{name}.txt"
+
+            # get the object
+            asset = getattr(self, name)
+
+            # export the asset
+            asset.data.to_csv(asset_pth, index=False)
+
+        return gtfs_directory

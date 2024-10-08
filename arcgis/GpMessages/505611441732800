@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?><messages><msg code="0" type="2">Start Time: Thursday, October 3, 2024 12:14:46 PM</msg><msg code="0" type="0">2024-10-03 12:14:46,165 | INFO | Starting validation for D:\projects\gtfs-tools\data\raw\gtfs_sf</msg><msg code="0" type="0">2024-10-03 12:14:46,228 | INFO | Starting to validate mdb_source_id=11 ['Temporary Amtrak Chartered Vehicle', 'Roadrunner Shuttle', 'Via Rail Canada', 'Route 66 Express', 'Alvand Transportation', 'Amtrak Chartered Vehicle', 'Arrow Trailways', 'Vegas Airporter', 'Executive Transportation', 'Stagecoach Express', 'Amtrak Chartered Motorcoach', 'The Lift', 'Beeline Express', 'Coach Usa', 'Shore Line East', 'Amtrak', 'Amtrak Chartered Vehicle', 'Sunway Charters', 'MARC'].</msg><msg code="1" type="100">﻿Traceback (most recent call last):
+﻿  File "&lt;string&gt;", line 249, in execute
+﻿  File "D:\projects\transit-accessibility-index\src\transit_index\gtfs\validation.py", line 706, in validate_gtfs_area_of_interest_data
+﻿    gtfs_valid = validate_gtfs_dataset(gtfs_dir, output_directory=output_directory)
+﻿                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+﻿  File "D:\projects\transit-accessibility-index\src\transit_index\gtfs\validation.py", line 634, in validate_gtfs_dataset
+﻿    df, file_valid = validate_gtfs_file(file_pth, return_status=True)
+﻿                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+﻿  File "D:\projects\transit-accessibility-index\src\transit_index\gtfs\validation.py", line 499, in validate_gtfs_file
+﻿    df, valid = validate_gtfs_dataframe(df, schema, gtfs_file)
+﻿                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+﻿  File "D:\projects\transit-accessibility-index\src\transit_index\gtfs\validation.py", line 359, in validate_gtfs_dataframe
+﻿    df = schema.validate(df, lazy=True, inplace=True)
+﻿         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+﻿  File "D:\projects\transit-accessibility-index\env\Lib\site-packages\pandera\api\pandas\container.py", line 125, in validate
+﻿    return self._validate(
+﻿           ^^^^^^^^^^^^^^^
+﻿  File "D:\projects\transit-accessibility-index\env\Lib\site-packages\pandera\api\pandas\container.py", line 154, in _validate
+﻿    return self.get_backend(check_obj).validate(
+﻿           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+﻿  File "D:\projects\transit-accessibility-index\env\Lib\site-packages\pandera\api\base\schema.py", line 124, in get_backend
+﻿    raise BackendNotFoundError(
+﻿pandera.errors.BackendNotFoundError: Backend not found for backend, class: (&lt;class 'transit_index.gtfs.validation.SchemaTemplate'&gt;, &lt;class 'pandas.core.frame.DataFrame'&gt;). Looked up the following base classes: (&lt;class 'pandas.core.frame.DataFrame'&gt;, &lt;class 'pandas.core.generic.NDFrame'&gt;, &lt;class 'pandas.core.base.PandasObject'&gt;, &lt;class 'pandas.core.accessor.DirNamesMixin'&gt;, &lt;class 'pandas.core.indexing.IndexingMixin'&gt;, &lt;class 'pandas.core.arraylike.OpsMixin'&gt;, &lt;class 'object'&gt;)
+</msg><msg code="-2147467259" type="100">Failed to execute (ValidateGtfsData).</msg><msg code="0" type="3">Failed at Thursday, October 3, 2024 12:14:46 PM (Elapsed Time: 0.13 seconds)</msg></messages>
