@@ -11,7 +11,7 @@ __all__ = [
     "add_agency_name_column",
     "add_location_descriptions",
     "add_modality_descriptions",
-    "add_standarized_modality_column",
+    "add_standardized_modality_column",
     "calculate_headway",
     "get_calendar_from_calendar_dates",
     "get_gtfs_directories",
@@ -317,7 +317,10 @@ def get_description_from_id(
             id_string = str(id_string)
 
         # get the individual agency ids from the comma separated values (eval enables processing quote enclosed strings)
-        id_eval = eval(id_string)
+        if "," in id_string:
+            id_eval = eval(id_string)
+        else:
+            id_eval = id_string
 
         # now, rebuild back into list of strings
         if isinstance(id_eval, Iterable):
@@ -328,8 +331,14 @@ def get_description_from_id(
         # create a set of the route type standard codes to avoid duplicates, then convert to list for sorting
         std_lst = list(set(lookup.get(id) for id in id_lst))
 
-        # combine descriptions into comma separated string
-        std_str = description_separator.join(std_lst)
+        # remove any null values from list
+        std_lst = [id for id in std_lst if id is not None]
+
+        # combine descriptions into comma separated string if anything found
+        if std_lst is None or len(std_lst) == 0:
+            std_str = None
+        else:
+            std_str = description_separator.join(std_lst)
 
     return std_str
 
@@ -400,7 +409,7 @@ def add_agency_name_column(
     return df
 
 
-def add_standarized_modality_column(
+def add_standardized_modality_column(
     data: pd.DataFrame,
     modality_column: Optional[str] = "route_type",
     standardized_modality_column: Optional[str] = "route_type_std",

@@ -434,6 +434,12 @@ class GtfsRoutes(GtfsFile):
                 "Cannot detect parent GtfsDataset, so cannot retrieve shapes."
             )
 
+        elif not self.parent.shapes.file_path.exists():
+            raise FileNotFoundError(
+                "Cannot locate the shapes.txt file. Consequently, cannot create spatially enabled data frame for "
+                f"routes in {self.parent.gtfs_folder}"
+            )
+
         else:
             df = (
                 self.data.join(
@@ -637,10 +643,10 @@ class GtfsStops(GtfsFile):
         ]
 
         # prune the schema to just needed columns
-        col_df = col_df.loc[:, ["stop_id", column_name]].set_index("stop_id")
+        col_df = col_df.loc[:, ["stop_id", column_name]]
 
         # clean up the data frame
-        col_df = col_df.drop_duplicates()
+        col_df = col_df.drop_duplicates().set_index("stop_id")
 
         return col_df
 

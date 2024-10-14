@@ -54,6 +54,13 @@ def test_stops_data():
     assert stops_sedf.spatial.validate()
 
 
+def test_swiss_modality():
+    pth = r"\\DevBA00007\data\gtfs_publishing\raw\esri_switzerland_gtfsfp202520240923zip_2024-09-26_11_58\gtfs"
+    gtfs = gtfs_tools.gtfs.GtfsDataset(pth)
+    modality_df = gtfs.stops.modalities
+    assert isinstance(modality_df, pd.DataFrame)
+
+
 class TestGtfsNL:
     @pytest.fixture(scope="class")
     def gtfs_source(self):
@@ -94,7 +101,7 @@ class TestGtfsAddLookupColumns:
         assert routes_df["agency_name"].notnull().all()
 
     def test_add_modality_std_routes(self, gtfs_source):
-        routes_df = gtfs_tools.utils.gtfs.add_standarized_modality_column(
+        routes_df = gtfs_tools.utils.gtfs.add_standardized_modality_column(
             gtfs_source.routes.data
         )
         assert routes_df["route_type_std"].notnull().all()
