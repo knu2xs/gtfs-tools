@@ -2,6 +2,7 @@ import datetime
 import logging
 import math
 from pathlib import Path
+import shlex
 from typing import Optional, Iterable
 
 import numpy as np
@@ -313,26 +314,18 @@ def get_description_from_id(
         lookup = lookup_dataframe.set_index(id_column)[description_column]
 
         # ensure agency id is a string
-        if not isinstance(id_string, str):
+        if not isinstance(id_string, str) and id_string is not None:
             id_string = str(id_string)
 
-        # get the individual agency ids from the comma separated values (eval enables processing quote enclosed strings)
-        if "," in id_string:
-            id_eval = eval(id_string)
-        else:
-            id_eval = id_string
+        # get the individual agency ids from the comma separated values, and account for string literals in quotes
+        if id_string is not None:
+            id_lst = shlex.split(id_string)
 
-        # now, rebuild back into list of strings
-        if isinstance(id_eval, Iterable):
-            id_lst = map(str, id_eval)
-        else:
-            id_lst = [str(id_eval)]
+            # create a set of the route type standard codes to avoid duplicates, then convert to list for sorting
+            std_lst = list(set(lookup.get(id) for id in id_lst))
 
-        # create a set of the route type standard codes to avoid duplicates, then convert to list for sorting
-        std_lst = list(set(lookup.get(id) for id in id_lst))
-
-        # remove any null values from list
-        std_lst = [id for id in std_lst if id is not None]
+            # remove any null values from list
+            std_lst = [id for id in std_lst if id is not None]
 
         # combine descriptions into comma separated string if anything found
         if std_lst is None or len(std_lst) == 0:
