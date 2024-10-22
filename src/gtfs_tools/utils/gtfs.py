@@ -302,36 +302,58 @@ def get_description_from_id(
             elif isinstance(id_string, int):
                 id_string = str(id_string)
 
+    # get the lookup table and ensure no
+    lkp_df = lookup_dataframe.loc[:, [id_column, description_column]]
+    lkp_df[id_column] = lkp_df[id_column].astype("string").str.strip()
+    lookup = lkp_df.set_index(id_column)[description_column]
+
     # only go to the effort if there is something to work with
+    if id_string is None:
+        id_string = None
+
+    # ensure id is a string
+    elif not isinstance(id_string, str):
+        id_string = str(id_string)
+
+        # make sure a zero length string is simply none
+        if len(id_string.replace(" ", "")) == 0:
+            id_string = None
+
+    # if there still is something to work with
     if id_string is None:
         std_str = None
 
-    # make sure a zero length string is simply none
-    elif len(id_string.replace(" ", "")) == 0:
-        std_str = None
     else:
-        # get the lookup table
-        lookup = lookup_dataframe.set_index(id_column)[description_column]
+        # get the individual values from the comma separated values, and account for string literals in quotes
+        id_lst = [str(val) for val in shlex.split(id_string) if val is not None]
 
-        # ensure agency id is a string
-        if not isinstance(id_string, str) and id_string is not None:
-            id_string = str(id_string)
+        # ensure no leading or trailing spaces
+        id_lst = [val.strip() for val in id_lst]
 
-        # get the individual agency ids from the comma separated values, and account for string literals in quotes
-        if id_string is not None:
-            id_lst = shlex.split(id_string)
+        # if only one value, just look it up
+        if len(id_lst) == 1:
+            std_lst = [lookup.get(id_lst[0])]
 
+        # otherwise, work through list
+        else:
             # create a set of the route type standard codes to avoid duplicates, then convert to list for sorting
             std_lst = list(set(lookup.get(id) for id in id_lst))
 
-            # remove any null values from list
-            std_lst = [id for id in std_lst if id is not None]
-
         # combine descriptions into comma separated string if anything found
-        if std_lst is None or len(std_lst) == 0:
+        if std_lst is None:
+            std_str = None
+        elif len(std_lst) == 0:
             std_str = None
         else:
+            # remove any null values from list
+            std_lst = [val for val in std_lst if val is not None]
+
+            # join values in list
             std_str = description_separator.join(std_lst)
+
+        # make sure not just returning zero length string
+        if len(std_str) == 0:
+            std_str = None
 
     return std_str
 
@@ -409,8 +431,9 @@ def add_standardized_modality_column(
 ) -> pd.DataFrame:
     """
     Add a standardized modality column to data frame. Some datasets can contain modality codes utilizing a much more
-    detailed European standard for transit types. If a much more succicinct coding is needed following the GTFS
+    detailed European standard for transit types. If a much more succinct coding is needed following the GTFS
     standard, this function will add a column with standardized modality codes.
+
     Args:
         data: Pandas data frame with a column containing modality codes.
         modality_column: Column containing modality codes. Default is ``route_type``.
