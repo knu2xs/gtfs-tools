@@ -222,6 +222,8 @@ class GtfsFile(object):
             if not all_columns and df.columns.tolist() != self.use_columns:
                 df = df.loc[:, self.use_columns]
 
+        logging.info(f"Raw {self.file_path.stem} record count: {df.shape[0]:,}")
+
         return df
 
     @cached_property
@@ -447,6 +449,8 @@ class GtfsRoutes(GtfsFile):
                     on="route_id",
                     how="left",
                 )
+                .sort_values("shape_id", na_position="last")
+                .drop_duplicates("route_id", keep="first")
                 .join(
                     self.parent.shapes.sedf.set_index("shape_id"),
                     on="shape_id",
@@ -542,10 +546,10 @@ class GtfsStops(GtfsFile):
             df["parent_station"] = pd.Series(dtype=str)
 
         if "location_type" not in df.columns:
-            df["location_type"] = pd.Series(dtype="Int64")
+            df["location_type"] = pd.Series(dtype=str)
 
         # apply a default location type if not populated
-        df["location_type"].fillna(0, inplace=True)
+        df["location_type"].fillna("0", inplace=True)
 
         return df
 
@@ -663,7 +667,14 @@ class GtfsStops(GtfsFile):
         ``route_type`` rows as possible by retrieving parent ``route_type``, remaining nulls are attempted to be
         filled by using ``route_type`` from the parent.
         """
-        type_df = self._retrieve_route_column("route_type")
+        # type_df = self._retrieve_route_column("route_type")
+        type_df = self.data.merge(
+            self.parent.lookup_stop_route, on="stop_id", how="left"
+        ).merge(
+            self.parent.routes.data[["route_id", "route_type"]],
+            on="route_id",
+            how="left",
+        )
 
         return type_df
 
@@ -690,7 +701,12 @@ class GtfsStops(GtfsFile):
 
         # otherwise, do the legwork to lookup through the schema...lots of crosstabs lookups
         else:
-            df = self._retrieve_route_column("agency_id")
+            # df = self._retrieve_route_column("agency_id")
+            df = self.parent.lookup_stop_route.merge(
+                self.parent.routes.data[["route_id", "agency_id"]],
+                on="route_id",
+                how="left",
+            ).drop(columns=["route_id"])
 
         return df
 
@@ -780,15 +796,22 @@ class GtfsStopTimes(GtfsFile):
         self.infer_missing = infer_missing
 
     @cached_property
-    def data(self) -> pd.DataFrame:
-        """Pandas data frame of the file data."""
-
+    def _raw_data(self) -> pd.DataFrame:
+        """Raw data without interpolated values...faster for crosstabs."""
         # get the data frame
         df = self._read_source(self.all_columns)
 
         # cast arrival and departure times to timedelta objects
         for col in ["arrival_time", "departure_time"]:
             df[col] = df[col].apply(lambda val: hh_mm_to_timedelta(val))
+
+        return df
+
+    @cached_property
+    def data(self) -> pd.DataFrame:
+        """Pandas data frame of the file data."""
+
+        df = self._raw_data
 
         # interpolate any missing stop times if desired
         if self.infer_missing:
@@ -1100,6 +1123,8 @@ class GtfsDataset(object):
         else:
             gtfs_dir = gtfs_dir_lst[0]
 
+            logging.info(f"GTFS directory is located at {gtfs_dir}")
+
         # create the GtfsDataset object instance
         gtfs = cls(
             gtfs_dir,
@@ -1123,6 +1148,8 @@ class GtfsDataset(object):
         # unpack the zipped archive
         with zipfile.ZipFile(zip_path, "r") as zipper:
             zipper.extractall(output_directory)
+
+        logging.info(f"Extracted archive from {zip_path} to {output_directory}")
 
         # ensure path
         if isinstance(output_directory, str):
@@ -1155,8 +1182,15 @@ class GtfsDataset(object):
     @cached_property
     def _crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
-        df = self.stop_times.data[["stop_id", "trip_id"]]
-        df = df.drop_duplicates()
+        df = (
+            self.stops.data[["stop_id"]]
+            .merge(
+                self.stop_times._raw_data[["stop_id", "trip_id"]].drop_duplicates(),
+                on="stop_id",
+                how="left",
+            )
+            .reset_index(drop=True)
+        )
         return df
 
     @cached_property
@@ -1164,7 +1198,7 @@ class GtfsDataset(object):
         """Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
         to routes."""
         df = self.trips.data[["trip_id", "route_id"]]
-        df = df.drop_duplicates()
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
@@ -1172,14 +1206,14 @@ class GtfsDataset(object):
         """Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
         trips to calendar."""
         df = self.trips.data[["trip_id", "service_id"]]
-        df = df.drop_duplicates()
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
     def _crosstab_route_agency(self) -> pd.DataFrame:
         """Data frame with crosstab lookup between routes and agencies."""
         df = self.routes.data[["route_id", "agency_id"]]
-        df = df.drop_duplicates()
+        df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
@@ -1204,11 +1238,17 @@ class GtfsDataset(object):
 
     @cached_property
     def _crosstab_stop_service(self) -> pd.DataFrame:
-        """Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
-        between stops and calendar."""
-        df = self._crosstab_stop_trip.merge(self._crosstab_trip_service, on="trip_id")[
-            ["stop_id", "service_id"]
-        ]
+        """
+        Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
+        between stops and calendar.
+
+        .. note::
+
+            This will include *all* stops, even if there is not an associated trip.
+        """
+        df = self._crosstab_stop_trip.merge(
+            self._crosstab_trip_service, on="trip_id", how="left"
+        )[["stop_id", "service_id"]]
         df = df.drop_duplicates().reset_index(drop=True)
         return df
 
@@ -1219,6 +1259,110 @@ class GtfsDataset(object):
             ~self.trips.data["shape_id"].isnull(), ["shape_id", "route_id"]
         ]
         df = df.drop_duplicates().reset_index(drop=True)
+        return df
+
+    @cached_property
+    def lookup_stop_trip(self) -> pd.DataFrame:
+        """
+        Crosstabular lookup from stops to trips, populating ``trip_id`` by first looking up parent values
+        from children, and then attempting to populate any remaining missing values from parents.
+        """
+
+        logging.info(
+            f"Stops with associated trips: {self._crosstab_stop_trip.shape[0]:,}"
+        )
+
+        # get a dataframe of trips pulled from children stops for parent stops
+        parent_df = (
+            self.stops.data[["parent_station", "stop_id"]]
+            .dropna()
+            .merge(self._crosstab_stop_trip, on="stop_id", how="left")
+            .drop(columns="stop_id")
+            .rename(columns={"parent_station": "stop_id"})
+            .drop_duplicates()
+        )
+
+        logging.info(
+            f"Parent stops with trips looked up from children: {parent_df.shape[0]:,}"
+        )
+
+        # get a dataframe of stops without trips, which can be inherited from parents
+        child_df = (
+            self._crosstab_stop_trip[self._crosstab_stop_trip["trip_id"].isnull()]
+            .drop(columns="trip_id")
+            .merge(parent_df, on="stop_id", how="left")
+            .sort_values(["stop_id", "trip_id"], na_position="last")
+            .drop_duplicates()
+        )
+
+        logging.info(
+            f"Child stops with trips looked up from parents: {child_df.shape[0]:,}"
+        )
+
+        # see if we can pull properties down to grandchildren not populated
+        grandchild_df = (
+            child_df[child_df["trip_id"].isnull()]
+            .drop(columns="trip_id")
+            .merge(parent_df, on="stop_id", how="left")
+            .sort_values(["stop_id", "trip_id"], na_position="last")
+            .drop_duplicates()
+        )
+
+        logging.info(
+            f"Grandchild stops with trips looked up from grandparents: {grandchild_df.shape[0]:,}"
+        )
+
+        # get a dataframe combining the raw crosstabs, parents from children, children from parents and grandchildren
+        crosstabs_df = (
+            pd.concat([self._crosstab_stop_trip, parent_df, child_df, grandchild_df])
+            .sort_values(["stop_id", "trip_id"], na_position="last")
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+
+        return crosstabs_df
+
+    @cached_property
+    def lookup_stop_route(self) -> pd.DataFrame:
+        """
+        Crosstabular lookup from stops to routes, populating ``route_id`` by first looking up parent values
+        from children, and then attempting to populate any remaining missing values from parents.
+        """
+        crosstabs_df = (
+            self.lookup_stop_trip.merge(
+                self._crosstab_trip_route, on="trip_id", how="left"
+            )
+            .drop(columns="trip_id")
+            .drop_duplicates()
+            .reset_index(drop=True)
+        )
+
+        return crosstabs_df
+
+    @cached_property
+    def lookup_stop_agency(self) -> pd.DataFrame:
+        """
+        Crosstablular lookup from stops to agencies, populating ``agency_id`` by first looking up parent values
+        from children, and then attempting to populate any remaining missing values from parents.
+        """
+        # if there is only one agency, no need to do complicated lookup
+        if len(self.agency.data.index) == 1:
+            df = self.stops.data["stop_id"].to_frame()
+            df["agency_id"] = self.agency.data.loc[0, "agency_id"]
+
+        # otherwise, do the legwork to lookup through the schema...lots of crosstabs lookups
+        else:
+            df = (
+                self.lookup_stop_route.merge(
+                    self.routes.data[["route_id", "agency_id"]],
+                    on="route_id",
+                    how="left",
+                )
+                .drop(columns=["route_id"])
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
+
         return df
 
     def export(self, gtfs_directory: Union[str, Path]) -> Path:
