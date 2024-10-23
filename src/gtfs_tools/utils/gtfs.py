@@ -402,10 +402,57 @@ def add_agency_name_column(
     return df
 
 
+def _select_single_modality(type_string: str) -> str:
+    """
+    Lookup the highest priority transit modality from a list of integer values in a string separated by a comma.
+
+    ref: https://gtfs.org/schedule/reference/#routestxt (specifically, the ``route_type`` column description)
+    """
+    # default to populate
+    carto_typ = None
+
+    # if a carto type is provided
+    if type_string is not None:
+        # split the types string on the comma into a list
+        typ_lst = [itm.strip() for itm in type_string.split(",")]
+
+        # get the remapping for the data types to the standard gtfs modality coding
+        typ_recode = route_type_df["route_type_carto"]
+
+        # look up the carto type to account for nonstandard modality coding
+        typ_lst = set(int(typ_recode.loc[typ]) for typ in typ_lst)
+
+        # hierarchy from lowest to highest
+        typ_hierarchy = [
+            4,  # ferry
+            12,  # monorail
+            6,  # aerial lift
+            7,  # funicular
+            2,  # rail
+            1,  # subway
+            0,  # light rail
+            5,  # cable tram
+            11,  # trolleybus
+            3,  # bus
+            31,  # school bus
+        ]
+
+        # if a type assigned
+        if len(typ_lst):
+            # iterate the hierarchical list to find the first match
+            for typ in typ_hierarchy:
+                if typ in typ_lst:
+                    carto_typ = str(typ)
+                    break
+
+    return carto_typ
+
+
 def add_standardized_modality_column(
     data: pd.DataFrame,
     modality_column: Optional[str] = "route_type",
     standardized_modality_column: Optional[str] = "route_type_std",
+    assign_single_modality: bool = False,
 ) -> pd.DataFrame:
     """
     Add a standardized modality column to data frame. Some datasets can contain modality codes utilizing a much more
@@ -425,6 +472,12 @@ def add_standardized_modality_column(
         description_column=standardized_modality_column,
         description_separator=",",
     )
+
+    if assign_single_modality:
+        df[standardized_modality_column] = df[modality_column].apply(
+            _select_single_modality
+        )
+
     return df
 
 
