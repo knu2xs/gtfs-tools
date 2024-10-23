@@ -546,10 +546,10 @@ class GtfsStops(GtfsFile):
             df["parent_station"] = pd.Series(dtype=str)
 
         if "location_type" not in df.columns:
-            df["location_type"] = pd.Series(dtype="Int64")
+            df["location_type"] = pd.Series(dtype=str)
 
         # apply a default location type if not populated
-        df["location_type"].fillna(0, inplace=True)
+        df["location_type"].fillna("0", inplace=True)
 
         return df
 

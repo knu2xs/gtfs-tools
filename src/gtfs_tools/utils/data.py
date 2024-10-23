@@ -70,26 +70,28 @@ def add_dataframe_to_feature_class(
         # convert the geometry objects to arcpy geometry objects
         df[geom_col] = df[geom_col].geom.as_arcpy
 
+    # if being used in Pro, provide progress status
+    arcpy.SetProgressor(
+        "step",
+        message=f"Inserting data into {os.path.basename(feature_class)}",
+        min_range=0,
+        max_range=df.shape[0],
+        step_value=1,
+    )
+
     # create a cursor to insert data
     with arcpy.da.InsertCursor(feature_class, icur_cols) as icur:
         # iterate the rows in the input data frame
-        for idx, row_tpl in enumerate(df.itertuples()):
+        for row_tpl in df.itertuples():
             # get a list of the row values filling null with None
             row = [None if pd.isnull(val) else val for val in row_tpl[1:]]
 
             # insert the row into the feature class
             icur.insertRow(row)
 
-            # if being used in Pro, provide progress status
-            arcpy.SetProgressor(
-                "step",
-                message=f"Inserting data into {os.path.basename(feature_class)}",
-                min_range=0,
-                max_range=df.shape[0],
-                step_value=idx,
-            )
+            arcpy.SetProgressorPosition()
 
     # reset ArcGIS Pro progress bar
-    arcpy.SetProgressor("default")
+    arcpy.ResetProgressor()
 
     return Path(feature_class)
