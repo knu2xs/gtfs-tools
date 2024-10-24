@@ -213,6 +213,7 @@ def get_route_types_table() -> pd.DataFrame:
             filepath_or_buffer=route_type_pth,
             names=["route_type", "route_type_desc", "route_type_gtfs"],
             dtype={"route_type": str, "route_type_desc": str, "route_type_gtfs": str},
+            header=0,
         )
 
     else:
@@ -432,6 +433,9 @@ def _select_single_modality(type_string: str) -> str:
     """
     # default to populate
     carto_typ = None
+
+    # get route types table
+    route_type_df = get_route_types_table()
 
     # if a carto type is provided
     if type_string is not None:
