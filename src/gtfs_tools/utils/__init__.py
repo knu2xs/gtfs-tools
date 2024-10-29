@@ -1,5 +1,5 @@
 from .log import configure_logging, format_pandas_for_logging
-from .main import has_arcpy
+from .main import has_arcpy, slugify
 from .data import add_dataframe_to_feature_class
 from . import exceptions
 from . import gtfs
@@ -12,5 +12,6 @@ __all__ = [
     "exceptions",
     "gtfs",
     "has_arcpy",
+    "slugify",
     "validation",
 ]
