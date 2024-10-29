@@ -4,11 +4,15 @@ easily be modified to support any testing framework.
 """
 import itertools
 import logging
+import uuid
 from pathlib import Path
 import sys
+import tempfile
 
+import arcpy.management
 import pandas as pd
 import pytest
+from sympy.physics.units import years
 
 # get paths to useful resources - notably where the src directory is
 self_pth = Path(__file__)
@@ -35,6 +39,19 @@ file_properties = [
     "stop_times",
     "trips",
 ]
+
+
+@pytest.fixture(scope="module")
+def tmp_dir() -> Path:
+    pth = Path(tempfile.mkdtemp())
+    yield pth
+
+
+@pytest.fixture(scope="function")
+def tmp_gdb(tmp_dir) -> Path:
+    str_pth = arcpy.management.CreateFileGDB(tmp_dir, f"tmp_{uuid.uuid4().hex}")[0]
+    pth = Path(str_pth)
+    yield pth
 
 
 def test_gtfs_init():

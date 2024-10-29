@@ -38,7 +38,7 @@ def add_dataframe_to_feature_class(
 
     # get a list of fields to use, those missing and those not being used
     icur_cols = [c for c in fc_cols if c in df_cols]
-    missing_cols = [c for c in fc_cols if c not in df_cols]
+    missing_cols = [c for c in fc_cols if c not in df_cols and c.lower() != "shape"]
     unused_cols = [c for c in df_cols if c not in fc_cols]
 
     # report if any columns not in the source

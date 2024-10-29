@@ -473,21 +473,25 @@ class GtfsShapes(GtfsFile):
     @cached_property
     def sedf(self) -> pd.DataFrame:
         """Spatially enabled data frame of the shapes data as polylines."""
-        sedf = (
-            self.data.sort_values(["shape_id", "shape_pt_sequence"])
-            .loc[:, ["shape_id", "shape_pt_lon", "shape_pt_lat"]]
-            .groupby("shape_id")
-            .apply(lambda r: list(zip(r["shape_pt_lon"], r["shape_pt_lat"])))
-            .apply(
-                lambda coords: Polyline(
-                    {"paths": [coords], "spatialReference": {"wkid": 4326}}
+        if self.data.shape[0] > 0:
+            sedf = (
+                self.data.sort_values(["shape_id", "shape_pt_sequence"])
+                .loc[:, ["shape_id", "shape_pt_lon", "shape_pt_lat"]]
+                .groupby("shape_id")
+                .apply(lambda r: list(zip(r["shape_pt_lon"], r["shape_pt_lat"])))
+                .apply(
+                    lambda coords: Polyline(
+                        {"paths": [coords], "spatialReference": {"wkid": 4326}}
+                    )
                 )
+                .rename("SHAPE")
+                .to_frame()
+                .reset_index()
+                .spatial.set_geometry("SHAPE", inplace=False)
             )
-            .rename("SHAPE")
-            .to_frame()
-            .reset_index()
-            .spatial.set_geometry("SHAPE", inplace=False)
-        )
+
+        else:
+            sedf = pd.DataFrame(columns=["shape_id", "SHAPE"])
 
         return sedf
 

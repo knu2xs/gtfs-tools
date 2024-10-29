@@ -183,7 +183,7 @@ def _validate_stop(row: pd.Series, enforce_gtfs_strict: bool) -> tuple[bool, str
     if np.isnan(row["stop_lon"]) or np.isnan(row["stop_lat"]):
         msg_lst.append("coordinates are missing")
 
-    # handle if stops types not yet added to schema
+    # handle if stops types (modality) not yet added to schema
     if "route_type" in row.index.to_list():
         # get a list of route types to compare against
         typ_vals = _get_route_types(enforce_gtfs_strict)
@@ -235,32 +235,39 @@ def validate_stop_rows(
             f"The stops_df is missing needed columns for row validation {missing_cols}"
         )
 
-    # run validation on each row
-    stops_df[["valid", "error_messages"]] = stops_df.apply(
-        lambda row: _validate_stop(row, enforce_gtfs_strict),
-        axis="columns",
-        result_type="expand",
-    )
+    # if there are stops to work with
+    if stops_df.shape[0] > 0:
+        # run validation on each row
+        stops_df[["valid", "error_messages"]] = stops_df.apply(
+            lambda row: _validate_stop(row, enforce_gtfs_strict),
+            axis="columns",
+            result_type="expand",
+        )
 
-    # prune the table to just the invalid records
-    invalid_df = stops_df.loc[~stops_df["valid"]]
+        # prune the table to just the invalid records
+        invalid_df = stops_df.loc[~stops_df["valid"]]
 
-    # if there are invalid stops
-    if len(invalid_df.index) > 0:
-        # get counts
-        invalid_cnt = len(invalid_df.index)
+        # if there are invalid stops
+        if len(invalid_df.index) > 0:
+            # get counts
+            invalid_cnt = len(invalid_df.index)
 
-        # report issues
-        logging.warning(f"{invalid_cnt:,} stops are invalid.")
+            # report issues
+            logging.warning(f"{invalid_cnt:,} stops are invalid.")
 
-    # copy any invalid records to a separate data frame
-    invalid_df = stops_df.loc[~stops_df["valid"]]
+        # copy any invalid records to a separate data frame
+        invalid_df = stops_df.loc[~stops_df["valid"]]
 
-    # prune the stops to just valid records
-    stops_df = stops_df[stops_df["valid"]].drop(columns=["valid", "error_messages"])
+        # prune the stops to just valid records
+        stops_df = stops_df[stops_df["valid"]].drop(columns=["valid", "error_messages"])
 
-    # if working with a spatially enabled data frame, enable it
-    if sedf:
-        stops_df.spatial.set_geometry(geom_col, inplace=True)
+        # if working with a spatially enabled data frame, enable it
+        if sedf:
+            stops_df.spatial.set_geometry(geom_col, inplace=True)
+
+    # ensure there is an invalid table to return
+    else:
+        invalid_df = stops_df.copy(deep=True)
+        invalid_df[["valid", "error_messages"]] = [None, None]
 
     return stops_df, invalid_df
