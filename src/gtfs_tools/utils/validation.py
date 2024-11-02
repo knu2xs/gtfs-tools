@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from titlecase import titlecase
 from cachetools import cached
 
 from .gtfs import get_route_types_table
@@ -271,3 +272,31 @@ def validate_stop_rows(
         invalid_df[["valid", "error_messages"]] = [None, None]
 
     return stops_df, invalid_df
+
+
+def _eval_uppercase_exceptions(word: str) -> str:
+    """Helper callback to handle exceptions, which should be capitalized."""
+    # TODO: make the list of uppercase exceptions load from a config file
+    uppercase_exceptions = ["NW", "SE", "SW", "NE"]
+
+    if word.upper() in uppercase_exceptions:
+        return word.upper()
+
+
+def title_case(input_string: str, do_not_evaluate_mixed_case: bool = True) -> str:
+    """
+    Evaluate an input string and make title case.
+
+    Args:
+        input_string: Sting to make title case.
+        do_not_evaluate_mixed_case: If the string already is mixed case, do not modify it. Defaults to True.
+    """
+    # leave alone if not touching mixed case
+    if do_not_evaluate_mixed_case and input_string.istitle():
+        return_str = input_string
+
+    # otherwise, process
+    else:
+        return_str = titlecase(input_string, callback=_eval_uppercase_exceptions)
+
+    return return_str
