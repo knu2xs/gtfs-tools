@@ -38,21 +38,26 @@ def add_dataframe_to_feature_class(
 
     # get a list of fields to use, those missing and those not being used
     icur_cols = [c for c in fc_cols if c in df_cols]
-    missing_cols = [c for c in fc_cols if c not in df_cols and c.lower() != "shape"]
+    missing_cols = [
+        c
+        for c in fc_cols
+        if c not in df_cols and c.lower() not in ["shape", "objectid", "shape_length"]
+    ]
     unused_cols = [c for c in df_cols if c not in fc_cols]
 
     # report if any columns not in the source
     if len(missing_cols) > 0:
         logging.info(
-            f"{len(missing_cols)} columns are in the target feature class, but not in the source data frame, and "
-            f"will not be populated with values {missing_cols}"
+            f"{len(missing_cols)} columns are in the {os.path.basename(feature_class)} feature class, but not in the "
+            f"source data frame, and will not be populated with values {missing_cols}"
         )
 
-    # report if any columns are not being used from teh source
+    # report if any columns are not being used from the source
     if len(unused_cols) > 0:
         logging.info(
-            f"{len(unused_cols)} columns are in the source data frame, but not in the target feature class, so the "
-            f"data in these columns will to be used {unused_cols}"
+            f"{len(unused_cols)} columns are in the source data frame, but not in the "
+            f"{os.path.basename(feature_class)} feature class, so the data in these columns will not be used "
+            f"{unused_cols}"
         )
 
     # if not needing to worry about a geometry column, input schema and insert cursor schema is identical
@@ -82,14 +87,14 @@ def add_dataframe_to_feature_class(
     # create a cursor to insert data
     with arcpy.da.InsertCursor(feature_class, icur_cols) as icur:
         # iterate the rows in the input data frame
-        for row_tpl in df.itertuples():
+        for idx, row_tpl in enumerate(df.itertuples()):
             # get a list of the row values filling null with None
             row = [None if pd.isnull(val) else val for val in row_tpl[1:]]
 
             # insert the row into the feature class
             icur.insertRow(row)
 
-            arcpy.SetProgressorPosition()
+            arcpy.SetProgressorPosition(idx)
 
     # reset ArcGIS Pro progress bar
     arcpy.ResetProgressor()
