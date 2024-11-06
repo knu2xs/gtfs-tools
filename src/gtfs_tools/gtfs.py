@@ -556,6 +556,10 @@ class GtfsStops(GtfsFile):
         # apply a default location type if not populated
         df["location_type"].fillna("0", inplace=True)
 
+        # ensure wheelchair boarding column is included
+        if "wheelchair_boarding" not in df.columns:
+            df["wheelchair_boarding"] = pd.Series(dtype=str)
+
         # provide default for consistency
         df["wheelchair_boarding"] = df["wheelchair_boarding"].fillna("0")
 
