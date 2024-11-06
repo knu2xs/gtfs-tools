@@ -506,6 +506,7 @@ class GtfsStops(GtfsFile):
         "level_id",
         "platform_code",
         "location_type",
+        "wheelchair_boarding",
     ]
     float_columns = ["stop_lat", "stop_lon"]
 
@@ -554,6 +555,32 @@ class GtfsStops(GtfsFile):
 
         # apply a default location type if not populated
         df["location_type"].fillna("0", inplace=True)
+
+        # provide default for consistency
+        df["wheelchair_boarding"] = df["wheelchair_boarding"].fillna("0")
+
+        # get wheelchair access with stop_id index where wheelchair accessibility is not null or zero
+        whlchr_srs = df.loc[
+            df["wheelchair_boarding"] != "0", ["stop_id", "wheelchair_boarding"]
+        ].set_index("stop_id")["wheelchair_boarding"]
+
+        # filter to just eligilbe children, stops (location type 0 or null) and entrance/exit (location type 2) and those without wheelchair boarding
+        chld_fltr = ((df["location_type"] == "0") | (df["location_type"] == "2")) & (
+            df["wheelchair_boarding"] == "0"
+        )
+
+        # create a series of the wheelchair accessibility for the parent stations
+        whlchr_prnt_df = df.loc[chld_fltr, ["stop_id", "parent_station"]].join(
+            whlchr_srs, on="parent_station", how="left"
+        )
+        whlchr_prnt = whlchr_prnt_df.set_index("stop_id")["wheelchair_boarding"]
+
+        # fill wheelchair accessible values in the child station with those from the parent station if wheelchair accessibility is not populated
+        df.loc[chld_fltr, "wheelchair_boarding"] = (
+            df.loc[chld_fltr, ["stop_id", "parent_station"]]
+            .join(whlchr_prnt, on="parent_station", how="left")
+            .set_index("stop_id")["wheelchair_boarding"]
+        )
 
         return df
 

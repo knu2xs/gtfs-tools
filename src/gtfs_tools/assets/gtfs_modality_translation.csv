@@ -1,15 +1,15 @@
 ﻿code,description,recode
-0,light rail,0
-1,subway,1
-2,rail,2
-3,bus,3
-4,ferry,4
-5,cable tram,5
-6,aerial lift,6
-7,funicular,7
-11,trolleybus,11
-12,monorail,12
-31,school bus,31
+0,Light Rail,0
+1,Subway,1
+2,Rail,2
+3,Bus,3
+4,Ferry,4
+5,Cable Tram,5
+6,Aerial Lift,6
+7,Funicular,7
+11,Trolleybus,11
+12,Monorail,12
+31,School Bus,31
 100,Railway Service,2
 101,High Speed Rail Service,2
 102,Long Distance Trains,2
