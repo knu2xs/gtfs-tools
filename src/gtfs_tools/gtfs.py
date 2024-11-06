@@ -568,7 +568,8 @@ class GtfsStops(GtfsFile):
             df["wheelchair_boarding"] != "0", ["stop_id", "wheelchair_boarding"]
         ].set_index("stop_id")["wheelchair_boarding"]
 
-        # filter to just eligilbe children, stops (location type 0 or null) and entrance/exit (location type 2) and those without wheelchair boarding
+        # filter to just eligible children, stops (location type 0 or null) and entrance/exit (location type 2)
+        # and those without wheelchair boarding
         chld_fltr = ((df["location_type"] == "0") | (df["location_type"] == "2")) & (
             df["wheelchair_boarding"] == "0"
         )
@@ -579,7 +580,8 @@ class GtfsStops(GtfsFile):
         )
         whlchr_prnt = whlchr_prnt_df.set_index("stop_id")["wheelchair_boarding"]
 
-        # fill wheelchair accessible values in the child station with those from the parent station if wheelchair accessibility is not populated
+        # fill wheelchair accessible values in the child station with those from the parent station if wheelchair
+        # accessibility is not populated
         df.loc[chld_fltr, "wheelchair_boarding"] = (
             df.loc[chld_fltr, ["stop_id", "parent_station"]]
             .join(whlchr_prnt, on="parent_station", how="left")
