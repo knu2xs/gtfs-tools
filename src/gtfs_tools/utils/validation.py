@@ -62,7 +62,16 @@ def validate_required_files(
     req_lst = [f.rstrip(".txt") for f in required_files]
 
     # get files present in the dataset directory
-    file_lst = [f.stem for f in gtfs_pth.glob("*.txt")]
+    file_lst = [f.stem for f in gtfs_pth.glob("**/*.txt")]
+
+    # determine if multiple gtfs datasets are in the child directory based on the required agency table
+    agency_lst = [f for f in file_lst if f == "agency"]
+    if len(agency_lst) > 1:
+        logging.error(
+            f"More than one GTFS dataset (agency file) detected in {gtfs_pth}. Can only load one GTFS "
+            f"dataset at a time."
+        )
+        valid = False
 
     # if handling calendar and calendar dates separately
     if calendar_or_calendar_dates:

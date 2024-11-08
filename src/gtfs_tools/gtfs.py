@@ -1004,6 +1004,14 @@ class GtfsDataset(object):
         else:
             self.required_files = required_files
 
+        # ensure required files are present
+        valid = self.validate(self.infer_calendar)
+
+        # update gtfs directory location based on location of agency.txt - is there since validate is true
+        # this provides support for nested directories inside zipped archives
+        if valid:
+            self.gtfs_folder = list(self.gtfs_folder.glob("**/agency.txt"))[0].parent
+
         # paths to child resources
         self._agency_pth = self.gtfs_folder / "agency.txt"
         self._calendar_pth = self.gtfs_folder / "calendar.txt"
@@ -1014,9 +1022,6 @@ class GtfsDataset(object):
         self._stops_pth = self.gtfs_folder / "stops.txt"
         self._stop_times_pth = self.gtfs_folder / "stop_times.txt"
         self._trips_pth = self.gtfs_folder / "trips.txt"
-
-        # ensure required files are present
-        self.validate(self.infer_calendar)
 
     def __repr__(self):
         return f"GtfsDataset: {self.gtfs_folder}"

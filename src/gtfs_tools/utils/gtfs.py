@@ -98,7 +98,7 @@ def interpolate_stop_times(stop_times_df: pd.DataFrame) -> pd.DataFrame:
             if col == "arrival_time":
                 # if there's nothing to work with
                 if stop_valid_cnt == 0:
-                    raise ValueError(f"No records in stop_times are usable.")
+                    logging.error(f"No records in stop_times are usable.")
 
                 # if there are valid records, and records will be interpolated
                 elif stop_update_cnt > 0:
