@@ -563,30 +563,38 @@ class GtfsStops(GtfsFile):
         # provide default for consistency
         df["wheelchair_boarding"] = df["wheelchair_boarding"].fillna("0")
 
-        # get wheelchair access with stop_id index where wheelchair accessibility is not null or zero
-        whlchr_srs = df.loc[
-            df["wheelchair_boarding"] != "0", ["stop_id", "wheelchair_boarding"]
-        ].set_index("stop_id")["wheelchair_boarding"]
+        # if duplicate stop ids exist, cannot assign wheelchair accessibility from parent to child stops
+        if df["stop_id"].duplicated().any():
+            logging.warning(
+                "Duplicate stop IDs detected. Cannot assign wheelchair accessibility from parent to child stops."
+            )
 
-        # filter to just eligible children, stops (location type 0 or null) and entrance/exit (location type 2)
-        # and those without wheelchair boarding
-        chld_fltr = ((df["location_type"] == "0") | (df["location_type"] == "2")) & (
-            df["wheelchair_boarding"] == "0"
-        )
+        # if no duplicates, can assign wheelchair accessibility from parents to children
+        else:
+            # get wheelchair access with stop_id index where wheelchair accessibility is not null or zero
+            whlchr_srs = df.loc[
+                df["wheelchair_boarding"] != "0", ["stop_id", "wheelchair_boarding"]
+            ].set_index("stop_id")["wheelchair_boarding"]
 
-        # create a series of the wheelchair accessibility for the parent stations
-        whlchr_prnt_df = df.loc[chld_fltr, ["stop_id", "parent_station"]].join(
-            whlchr_srs, on="parent_station", how="left"
-        )
-        whlchr_prnt = whlchr_prnt_df.set_index("stop_id")["wheelchair_boarding"]
+            # filter to just eligible children, stops (location type 0 or null) and entrance/exit (location type 2)
+            # and those without wheelchair boarding
+            chld_fltr = (
+                (df["location_type"] == "0") | (df["location_type"] == "2")
+            ) & (df["wheelchair_boarding"] == "0")
 
-        # fill wheelchair accessible values in the child station with those from the parent station if wheelchair
-        # accessibility is not populated
-        df.loc[chld_fltr, "wheelchair_boarding"] = (
-            df.loc[chld_fltr, ["stop_id", "parent_station"]]
-            .join(whlchr_prnt, on="parent_station", how="left")
-            .set_index("stop_id")["wheelchair_boarding"]
-        )
+            # create a series of the wheelchair accessibility for the parent stations
+            whlchr_prnt_df = df.loc[chld_fltr, ["stop_id", "parent_station"]].join(
+                whlchr_srs, on="parent_station", how="left"
+            )
+            whlchr_prnt = whlchr_prnt_df.set_index("stop_id")["wheelchair_boarding"]
+
+            # fill wheelchair accessible values in the child station with those from the parent station if wheelchair
+            # accessibility is not populated
+            df.loc[chld_fltr, "wheelchair_boarding"] = (
+                df.loc[chld_fltr, ["stop_id", "parent_station"]]
+                .join(whlchr_prnt, on="parent_station", how="left")
+                .set_index("stop_id")["wheelchair_boarding"]
+            )
 
         return df
 
@@ -1130,7 +1138,7 @@ class GtfsDataset(object):
         standardize_route_types: Optional[bool] = False,
     ) -> "GtfsDataset":
         """
-        Create a ``GtfsDataset`` from a zip file.
+        Create a ``GtfsDataset`` from a zip file.e
 
         Args:
             zip_path: Path to the zip file.
