@@ -180,17 +180,18 @@ def _validate_stop(row: pd.Series, enforce_gtfs_strict: bool) -> tuple[bool, str
     # list to store error messages
     msg_lst = []
 
-    # check longitude for out of bounds
-    if -180 > row["stop_lon"] > 180:
+    # ensure coordinates are not null and not out of bounds
+    if row["stop_lon"] is None or np.isnan(row["stop_lat"]):
+        msg_lst.append("stop_lon is Null")
+
+    elif -180 > row["stop_lon"] > 180:
         msg_lst.append("stop_lon out of bounds (+-180)")
 
-    # check latitude for out of bounds
-    if -90 > row["stop_lat"] > 90:
-        msg_lst.append("stop_lat out of bounds (+-90)")
+    if row["stop_lat"] is None or np.isnan(row["stop_lon"]):
+        msg_lst.append("stop_lat is Null")
 
-    # ensure coordinates are not null
-    if np.isnan(row["stop_lon"]) or np.isnan(row["stop_lat"]):
-        msg_lst.append("coordinates are missing")
+    elif -90 > row["stop_lat"] > 90:
+        msg_lst.append("stop_lat out of bounds (+-90)")
 
     # handle if stops types (modality) not yet added to schema
     if "route_type" in row.index.to_list():
