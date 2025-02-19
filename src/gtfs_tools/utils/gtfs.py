@@ -353,8 +353,9 @@ def get_description_from_id(
             std_str = description_separator.join(std_lst)
 
         # make sure not just returning zero length string
-        if len(std_str) == 0:
-            std_str = None
+        if isinstance(std_str, str):
+            if len(std_str) == 0:
+                std_str = None
 
     return std_str
 

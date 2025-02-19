@@ -5,8 +5,9 @@ import tempfile
 from typing import Optional, Union
 import zipfile
 
+from dask import dataframe as dd
 import numpy as np
-from arcgis.features import GeoAccessor
+from arcgis.features import GeoAccessor, GeoDaskSpatialAccessor
 from arcgis.geometry import Point, Polyline
 import pandas as pd
 
@@ -162,13 +163,13 @@ class GtfsFile(object):
         # for each column in the source data, only add the column to dtype if present in source
         for col in self.file_columns:
             if col in self.string_columns:
-                dtype[col] = "O"
+                dtype[col] = 'string'
 
             elif col in self.integer_columns or col in self.boolean_columns:
-                dtype[col] = "Int64"
+                dtype[col] = 'Int64'
 
             elif col in self.float_columns:
-                dtype[col] = "Float64"
+                dtype[col] = 'Float64'
 
         return dtype
 
@@ -226,13 +227,63 @@ class GtfsFile(object):
 
         return df
 
+    def _read_source_dask(self, all_columns: Optional[bool] = False, usecols: Optional[list[str]] = None) -> pd.DataFrame():
+        """Helper to read the CSV file using dask."""
+        # check to see if the file even exists
+        if not self.file_path.exists():
+            raise FileNotFoundError(
+                f"Cannot locate {self.file_path} to create the data for {self.__class__.__name__}."
+            )
+
+        # ensure required columns are in source data
+        self._ensure_columns()
+
+        # if reading all the columns, read the data and return the result
+        if all_columns or self.use_columns is None:
+            ddf = dd.read_csv(
+                urlpath=self.file_path,
+                sep=",",
+                header=0,
+                dtype=self.pandas_dtype,
+            )
+
+        # if overriding columns to use
+        elif usecols is not None:
+            ddf = dd.read_csv(
+                urlpath=self.file_path,
+                usecols=usecols,
+                sep=",",
+                header=0,
+                dtype=self.pandas_dtype,
+            )
+
+        # otherwise, just return the columns listed to use
+        else:
+            ddf = dd.read_csv(
+                urlpath=self.file_path,
+                usecols=self.use_columns,
+                sep=",",
+                header=0,
+                dtype=self.pandas_dtype,
+            )
+
+        # make sure zero length or all space strings are null
+        ddf = replace_zero_and_space_strings_with_nulls(ddf)
+
+        logging.info(f"Raw {self.file_path.stem} record count: {len(ddf.index):,}")
+
+        return ddf
+
+    # @cached_property
+    # def dask_data(self) -> dd.DataFrame:
+    #     """Dask dataframe of the file data."""
+    #     df = self._read_source_dask(self.all_columns)
+    #     return df
+
     @cached_property
     def data(self) -> pd.DataFrame:
         """Pandas data frame of the file data."""
-
-        # get the data frame
         df = self._read_source(self.all_columns)
-
         return df
 
     @cached_property
@@ -794,9 +845,10 @@ class GtfsStops(GtfsFile):
     def trip_count(self) -> pd.DataFrame:
         """Weekly trip count for each stop."""
         cnt_df = (
-            self.parent._crosstab_stop_trip.groupby("stop_id")
-            .count()
-            .rename(columns={"trip_id": "trip_count"})
+            self.parent.lookup_stop_trip
+            .merge(self.parent.trips.service_days, on='trip_id')[['stop_id', 'service_days']]
+            .groupby('stop_id').sum()
+            .rename(columns={'service_days': 'trip_count'})
         )
         return cnt_df
 
@@ -921,7 +973,7 @@ class GtfsTrips(GtfsFile):
     ]
 
     @cached_property
-    def sedf(self):
+    def sedf(self) -> pd.DataFrame:
         if self.parent is None:
             raise ValueError(
                 "Cannot detect parent GtfsDataset, so cannot retrieve shapes for the Spatially Enabled Dataframe."
@@ -938,6 +990,21 @@ class GtfsTrips(GtfsFile):
                 .spatial.set_geometry("SHAPE", inplace=False)
             )
         return df
+
+    @cached_property
+    def service_days(self) -> pd.Series:
+        # day of week columns in the calendar file
+        dow_cols = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+        # although not supposed to happen, catch potential
+        svc = self.parent.calendar.data.set_index('service_id')[dow_cols].apply(lambda r: sum(r), axis=1)
+        svc.name = 'service_days'
+
+        # attach the service days to trips based on service id, and remove trip id
+        svc_days = self.data.loc[:, ['trip_id', 'service_id']].join(svc, on='service_id').drop(
+            columns='service_id').set_index('trip_id')
+
+        return svc_days
 
 
 class GtfsDataset(object):
@@ -1232,15 +1299,18 @@ class GtfsDataset(object):
     @cached_property
     def _crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
-        df = (
-            self.stops.data[["stop_id"]]
-            .merge(
-                self.stop_times._raw_data[["stop_id", "trip_id"]].drop_duplicates(),
-                on="stop_id",
-                how="left",
-            )
-            .reset_index(drop=True)
-        )
+        # get a dataframe with unique stop ids from the stops...necessary to ensure we have all stop id's
+        ddf_stops = self.stops._read_source_dask(usecols=['stop_id'])
+
+        # read the stop times into a dask dataframe to get unique permutations of stop and trip id's
+        ddf_stop_times = self.stop_times._read_source_dask(usecols=["stop_id", "trip_id"]).drop_duplicates()
+
+        # create crosstabs dask dataframe to go between stops and trips
+        ddf_crosstabs: dd.DataFrame = ddf_stops.merge(ddf_stop_times, on='stop_id', how='left')
+
+        # convert to a pandas dataframe
+        df = ddf_crosstabs.compute()
+
         return df
 
     @cached_property
