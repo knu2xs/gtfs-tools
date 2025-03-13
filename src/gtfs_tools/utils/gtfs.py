@@ -3,9 +3,8 @@ import logging
 import math
 from pathlib import Path
 import shlex
-from typing import Optional, Iterable
+from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 __all__ = [
