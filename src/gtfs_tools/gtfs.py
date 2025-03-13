@@ -1,3 +1,4 @@
+import datetime
 from functools import cached_property
 import logging
 from pathlib import Path
@@ -5,6 +6,7 @@ import tempfile
 from typing import Optional, Union
 import zipfile
 
+from cachetools import cached
 from dask import dataframe as dd
 import numpy as np
 from arcgis.features import GeoAccessor, GeoDaskSpatialAccessor
@@ -163,13 +165,13 @@ class GtfsFile(object):
         # for each column in the source data, only add the column to dtype if present in source
         for col in self.file_columns:
             if col in self.string_columns:
-                dtype[col] = 'string'
+                dtype[col] = "string"
 
             elif col in self.integer_columns or col in self.boolean_columns:
-                dtype[col] = 'Int64'
+                dtype[col] = "Int64"
 
             elif col in self.float_columns:
-                dtype[col] = 'Float64'
+                dtype[col] = "Float64"
 
         return dtype
 
@@ -227,7 +229,9 @@ class GtfsFile(object):
 
         return df
 
-    def _read_source_dask(self, all_columns: Optional[bool] = False, usecols: Optional[list[str]] = None) -> pd.DataFrame():
+    def _read_source_dask(
+        self, all_columns: Optional[bool] = False, usecols: Optional[list[str]] = None
+    ) -> pd.DataFrame():
         """Helper to read the CSV file using dask."""
         # check to see if the file even exists
         if not self.file_path.exists():
@@ -471,6 +475,11 @@ class GtfsRoutes(GtfsFile):
             if self.parent.agency.data.shape[0] == 1:
                 df["agency_id"] = self.parent.agency.data.loc[0, "agency_id"]
 
+        # make sure the route types table is correctly coded
+        df["route_type"] = (
+            df["route_type"].astype("float").astype("int64").astype("str")
+        )
+
         # if desired to standardize the route types, do so
         if self.standardize_route_types:
             df = std_rt_typs(df, route_type_column="route_type")
@@ -511,6 +520,70 @@ class GtfsRoutes(GtfsFile):
                 .spatial.set_geometry("SHAPE", inplace=False)
             )
         return df
+
+    def get_temporal_window(
+        self,
+        start_hour: Optional[int] = 10,
+        end_hour: Optional[int] = 4,
+        trip_count_column: Optional[str] = "late_night_trip_count",
+    ) -> pd.DataFrame:
+        """
+        Get status of route providing service between a start and end time.
+
+        Args:
+            start_hour: Start hour of late night. Default is 22 (10pm).
+            end_hour: End hour of late night. Default is 4.
+            trip_count_column: Name for output trip count column. Default is ``late_night_trip_count``.
+        """
+        # get late night data
+        ln_trp_srs = self.parent.trips.get_temporal_window(
+            start_hour=start_hour, end_hour=end_hour
+        )
+        ln_trp_srs.name = trip_count_column
+
+        # get the late night trip count by joining trip overnight service with routes
+        ln_rt_df = (
+            self.parent._crosstab_trip_route.join(
+                ln_trp_srs.astype("int64"), on="trip_id"
+            )
+            .drop(columns="trip_id")
+            .groupby("route_id")
+            .sum()
+        )
+
+        return ln_rt_df
+
+    @cached_property
+    def late_night(self) -> pd.DataFrame:
+        """Get status of trip providing late night service, defined as service between 10pm and 4am."""
+        return self.get_temporal_window()
+
+    @cached_property
+    def off_hours(self) -> pd.DataFrame:
+        """Get status of trip providing off-hours service, defined as service between 3am and 5am."""
+        return self.get_temporal_window(
+            start_hour=3, end_hour=5, trip_count_column="off_hours_trip_count"
+        )
+
+    @cached_property
+    def weekend_service(self) -> pd.DataFrame:
+        """Get the trip count offered on weekends for the route."""
+        wknd_df = (
+            self.parent.trips.data[["route_id", "trip_id"]]
+            .join(self.parent.trips.weekend_service, on="trip_id", how="left")
+            .drop(columns="trip_id")
+            .groupby("route_id")
+            .sum()
+            .rename(
+                columns={
+                    "weekend_day_count": "weekend_trip_count",
+                    "saturday": "saturday_trip_count",
+                    "sunday": "sunday_trip_count",
+                }
+            )
+        )
+
+        return wknd_df
 
 
 class GtfsShapes(GtfsFile):
@@ -753,26 +826,23 @@ class GtfsStops(GtfsFile):
     @cached_property
     def modalities(self) -> pd.DataFrame:
         """
-        Get stop modality (``route_type``) for stops. This is a three-step process to get the modality for as many
-        stops as possible.
-
-        Stop modality is looked up by retrieving the ``route_type`` from ``route.txt``. Looking these up requires
-        traversing ``stops > stop_times > trips > routes``. Because of this, parent stations, since they do not have
-        stop times (stop times are assigned to the child stops), the parent stations will not have a  modality. The
-        same is true for many child stops in large train stations, the stops for platforms. After filling as many null
-        ``route_type`` rows as possible by retrieving parent ``route_type``, remaining nulls are attempted to be
-        filled by using ``route_type`` from the parent.
+        Stop modality (``route_type``) for every stop.
         """
-        # type_df = self._retrieve_route_column("route_type")
-        type_df = self.data.merge(
-            self.parent.lookup_stop_route, on="stop_id", how="left"
-        ).merge(
+        # get a data frame with stop id, route id, and route type (codes)
+        stp_typ_df = self.parent.lookup_stop_route.merge(
             self.parent.routes.data[["route_id", "route_type"]],
             on="route_id",
             how="left",
         )
 
-        return type_df
+        # create a series based on the
+        stp_typ = (
+            stp_typ_df[["stop_id", "route_type"]]
+            .groupby("stop_id")["route_type"]
+            .apply(lambda val: ",".join(sorted(set(val.dropna().astype(str)))))
+        )
+
+        return stp_typ
 
     @cached_property
     def agency(self) -> pd.DataFrame:
@@ -821,7 +891,16 @@ class GtfsStops(GtfsFile):
         Stops spatially enabled data frame with agency id and name. Since multiple agencies can serve a single stop,
         stops may be listed more than once.
         """
-        df = self._add_agency(self.sedf).spatial.set_geometry("SHAPE", inplace=False)
+        # add the agency to the data
+        df = self.data_with_agency
+
+        # create geometry from the longitude (X) and latitude (Y) columns
+        df["SHAPE"] = df[["stop_lon", "stop_lat"]].apply(
+            lambda r: Point({"x": r[0], "y": r[1], "spatialReference": {"wkid": 4326}}),
+            axis=1,
+        )
+        df.spatial.set_geometry("SHAPE", inplace=True)
+
         return df
 
     @cached_property
@@ -845,10 +924,12 @@ class GtfsStops(GtfsFile):
     def trip_count(self) -> pd.DataFrame:
         """Weekly trip count for each stop."""
         cnt_df = (
-            self.parent.lookup_stop_trip
-            .merge(self.parent.trips.service_days, on='trip_id')[['stop_id', 'service_days']]
-            .groupby('stop_id').sum()
-            .rename(columns={'service_days': 'trip_count'})
+            self.parent.lookup_stop_trip.merge(
+                self.parent.trips.service_days, on="trip_id"
+            )[["stop_id", "service_days"]]
+            .groupby("stop_id")
+            .sum()
+            .rename(columns={"service_days": "trip_count"})
         )
         return cnt_df
 
@@ -993,18 +1074,194 @@ class GtfsTrips(GtfsFile):
 
     @cached_property
     def service_days(self) -> pd.Series:
+        """Days of the week the trip offers service."""
         # day of week columns in the calendar file
-        dow_cols = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        dow_cols = [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        ]
 
         # although not supposed to happen, catch potential
-        svc = self.parent.calendar.data.set_index('service_id')[dow_cols].apply(lambda r: sum(r), axis=1)
-        svc.name = 'service_days'
+        svc = self.parent.calendar.data.set_index("service_id")[dow_cols].apply(
+            lambda r: sum(r), axis=1
+        )
+        svc.name = "service_days"
 
         # attach the service days to trips based on service id, and remove trip id
-        svc_days = self.data.loc[:, ['trip_id', 'service_id']].join(svc, on='service_id').drop(
-            columns='service_id').set_index('trip_id')
+        svc_days = (
+            self.data.loc[:, ["trip_id", "service_id"]]
+            .join(svc, on="service_id")
+            .drop(columns="service_id")
+            .set_index("trip_id")
+        )
 
         return svc_days
+
+    def get_temporal_window(
+        self,
+        column_name: str,
+        start_hour: Optional[int] = 10,
+        start_minutes: Optional[int] = 0,
+        end_hour: Optional[int] = 4,
+        end_minutes: Optional[int] = 0,
+    ) -> pd.DataFrame:
+        """
+        Get status of trip providing service between start and end times.
+
+        Args:
+            column_name: Name of column to add providing temporal status status for.
+            start_hour: Start hour of temporal window. Default is 22 (10pm).
+            end_minutes: Start minutes of temporal window. Default is 0.
+            end_hour: End hour of temporal window. Default is 4.
+            start_minutes: End minutes of temporal window. Default is 0.
+        """
+        # prune schema to just columns needed for analysis
+        st_df = self.parent.stop_times.data.loc[:, ["trip_id", "arrival_time"]]
+
+        # calculate decimal hours
+        start_time = start_hour + start_minutes / 60
+        end_time = end_hour + end_minutes / 60
+
+        # handle if spanning midnight (start hour is greater than end hour)
+        if start_time < end_time:
+            # calculate if after start time
+            st_df["after_start_time"] = (
+                st_df["arrival_time"].dt.total_seconds() / 3600 % 24 > start_time
+            )
+
+            # calculate if before end time
+            st_df["before_end_time"] = (
+                st_df["arrival_time"].dt.total_seconds() / 3600 % 24 < end_time
+            )
+
+            # consolidate by trip_id to get any of the stop times respectively after and before the cutoffs
+            ln_df = st_df.groupby("trip_id")[
+                ["after_start_time", "before_end_time"]
+            ].any()
+
+            # if after start time and before the end time
+            ln_srs = ln_df["after_start_time"] & ln_df["before_end_time"]
+
+            # add the column name
+            ln_srs.name = column_name
+
+        # handle normal pattern, start time less than end time
+        else:
+            # calculate, by stop, if providing late night service, using modulus to account for trips spanning midnight
+            st_df[column_name] = (
+                st_df["arrival_time"].dt.total_seconds() / 3600 % 24 > start_time
+            ) | (st_df["arrival_time"].dt.total_seconds() / 3600 % 24 < end_time)
+
+            # consolidate by trip_id
+            ln_srs = st_df.groupby("trip_id")[column_name].any()
+
+        # convert to dataframe for consistency
+        ln_df = ln_srs.to_frame()
+
+        return ln_df
+
+    @cached_property
+    def early_morning(self) -> pd.DataFrame:
+        """Trips providing early morning service (3am to 6am)."""
+        df = self.get_temporal_window(
+            column_name="early_morning",
+            start_hour=3,
+            end_hour=6,
+        )
+        return df
+
+    @cached_property
+    def morning_peak(self) -> pd.DataFrame:
+        """Trips providing morning peak, "rush hour," service (6am to 9am)."""
+        df = self.get_temporal_window(
+            column_name="morning_peak",
+            start_hour=6,
+            end_hour=9,
+        )
+        return df
+
+    @cached_property
+    def midday(self) -> pd.DataFrame:
+        """Trips providing midday service (9am to 3pm)."""
+        df = self.get_temporal_window(
+            column_name="midday",
+            start_hour=9,
+            end_hour=15,
+        )
+        return df
+
+    @cached_property
+    def afternoon_peak(self) -> pd.DataFrame:
+        """Trips providing afternoon peak, "rush hour," service (3pm to 6pm)."""
+        df = self.get_temporal_window(
+            column_name="afternoon_peak",
+            start_hour=15,
+            end_hour=18,
+        )
+        return df
+
+    @cached_property
+    def evening(self) -> pd.DataFrame:
+        """Trips providing evening service (6am to 9am)."""
+        df = self.get_temporal_window(
+            column_name="evening",
+            start_hour=18,
+            end_hour=22,
+        )
+        return df
+
+    @cached_property
+    def late_night(self) -> pd.DataFrame:
+        """Get status of trip providing late night service, defined as service between 10pm and 4am."""
+        df = self.get_temporal_window(
+            column_name="late_night",
+            start_hour=22,
+            end_hour=3,
+        )
+        return df
+
+    @cached_property
+    def temporal_windows(self) -> pd.DataFrame:
+        """
+        Get status of trip providing service in the following temporal windows:
+        * Early Morning: 3am to 6am
+        * Morning Peak: 6am to 9am
+        * Midday: 9am to 3pm
+        * Afternoon Peak: 3pm to 6pm
+        * Evening: 3pm to 10pm
+        * Late Night: 10pm to 3am
+        """
+        df = (
+            self.early_morning.join(self.morning_peak)
+            .join(self.midday)
+            .join(self.afternoon_peak)
+            .join(self.evening)
+            .join(self.late_night)
+        )
+        return df
+
+    @cached_property
+    def weekend_service(self) -> pd.DataFrame:
+        """
+        Data frame indicating if trip provides service on Saturday, Sunday and the count of days weekend service is
+        provided.
+        """
+        # combine weekend days' service columns with the trip id
+        wknd_df = self.parent._crosstab_trip_service.merge(
+            self.parent.calendar.data.loc[:, ["service_id", "saturday", "sunday"]],
+            on="service_id",
+        )
+
+        # calculate the count of weekend days providing service
+        wknd_df["weekend_day_count"] = wknd_df["saturday"] + wknd_df["sunday"]
+        wknd_df = wknd_df.drop(columns="service_id").set_index("trip_id")
+
+        return wknd_df
 
 
 class GtfsDataset(object):
@@ -1300,13 +1557,17 @@ class GtfsDataset(object):
     def _crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
         # get a dataframe with unique stop ids from the stops...necessary to ensure we have all stop id's
-        ddf_stops = self.stops._read_source_dask(usecols=['stop_id'])
+        ddf_stops = self.stops._read_source_dask(usecols=["stop_id"])
 
         # read the stop times into a dask dataframe to get unique permutations of stop and trip id's
-        ddf_stop_times = self.stop_times._read_source_dask(usecols=["stop_id", "trip_id"]).drop_duplicates()
+        ddf_stop_times = self.stop_times._read_source_dask(
+            usecols=["stop_id", "trip_id"]
+        ).drop_duplicates()
 
         # create crosstabs dask dataframe to go between stops and trips
-        ddf_crosstabs: dd.DataFrame = ddf_stops.merge(ddf_stop_times, on='stop_id', how='left')
+        ddf_crosstabs: dd.DataFrame = ddf_stops.merge(
+            ddf_stop_times, on="stop_id", how="left"
+        )
 
         # convert to a pandas dataframe
         df = ddf_crosstabs.compute()

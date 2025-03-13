@@ -239,15 +239,19 @@ def standardize_route_types(
         )
 
     # get the crosstabs table
-    lookup_df = get_route_types_table()[["route_type"]].rename(
-        {"route_type_gtfs": route_type_column}, axis=1
+    lookup_df = (
+        get_route_types_table()
+        .set_index("route_type")[["route_type_gtfs"]]
+        .rename(columns={"route_type_gtfs": route_type_column})
     )
 
     # rename the existing column
     df = input_dataframe.rename(columns={route_type_column: "type_replace"})
 
     # join the lookup and drop the old
-    out_df = df.join(lookup_df, on="type_replace", how="left")
+    out_df = df.join(lookup_df, on="type_replace", how="left").drop(
+        columns=["type_replace"]
+    )
 
     return out_df
 
