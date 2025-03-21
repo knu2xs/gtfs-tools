@@ -1,4 +1,5 @@
 import datetime
+import importlib.util
 from functools import cached_property
 import logging
 from pathlib import Path
@@ -1556,21 +1557,38 @@ class GtfsDataset(object):
     @cached_property
     def _crosstab_stop_trip(self) -> pd.DataFrame:
         """Data frame with crosstabs lookup between stops and trips."""
-        # get a dataframe with unique stop ids from the stops...necessary to ensure we have all stop id's
-        ddf_stops = self.stops._read_source_dask(usecols=["stop_id"])
+        # if duckdb is available, use this...way faster
+        if importlib.util.find_spec("duckdb") is not None:
+            # import duckdb
+            import duckdb
 
-        # read the stop times into a dask dataframe to get unique permutations of stop and trip id's
-        ddf_stop_times = self.stop_times._read_source_dask(
-            usecols=["stop_id", "trip_id"]
-        ).drop_duplicates()
+            # create the crosstabs lookup
+            stop_times_df = duckdb.sql(
+                f"""SELECT DISTINCT stop_id, trip_id FROM read_csv('{self.stop_times.file_path}')"""
+            ).df()
 
-        # create crosstabs dask dataframe to go between stops and trips
-        ddf_crosstabs: dd.DataFrame = ddf_stops.merge(
-            ddf_stop_times, on="stop_id", how="left"
-        )
+            # combine the stop times lookup with the stops to ensure complete stop ids
+            df = self.stops.data[["stop_id"]].merge(
+                stop_times_df, on="stop_id", how="left"
+            )
 
-        # convert to a pandas dataframe
-        df = ddf_crosstabs.compute()
+        # otherwise, we know dask is available with any ArcGIS Pro installation
+        else:
+            # get a dataframe with unique stop ids from the stops...necessary to ensure we have all stop id's
+            ddf_stops = self.stops._read_source_dask(usecols=["stop_id"])
+
+            # read the stop times into a dask dataframe to get unique permutations of stop and trip id's
+            ddf_stop_times = self.stop_times._read_source_dask(
+                usecols=["stop_id", "trip_id"]
+            ).drop_duplicates()
+
+            # create crosstabs dask dataframe to go between stops and trips
+            ddf_crosstabs: dd.DataFrame = ddf_stops.merge(
+                ddf_stop_times, on="stop_id", how="left"
+            )
+
+            # convert to a pandas dataframe
+            df = ddf_crosstabs.compute()
 
         return df
 
