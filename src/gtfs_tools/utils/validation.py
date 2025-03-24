@@ -163,7 +163,7 @@ def validate_modality_codes(
     if valid:
         logging.debug("All modality codes (route types) are valid.")
     else:
-        logging.error("Not all modality codes (route types) are valid.")
+        logging.warning("Not all modality codes (route types) are valid.")
 
     return valid
 
