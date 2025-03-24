@@ -940,7 +940,7 @@ class GtfsStops(GtfsFile):
         cnt_df = (
             self.parent._crosstab_stop_route.groupby("stop_id")
             .count()
-            .rename({"route_id": "route_count"})
+            .rename(columns={"route_id": "route_count"})
         )
         return cnt_df
 
@@ -1562,33 +1562,32 @@ class GtfsDataset(object):
             # import duckdb
             import duckdb
 
-            # create the crosstabs lookup
+            # create the crosstabs lookup using duckdb to boil down the stop times table to just a stop to trip lookup
             stop_times_df = duckdb.sql(
                 f"""SELECT DISTINCT stop_id, trip_id FROM read_csv('{self.stop_times.file_path}')"""
             ).df()
 
-            # combine the stop times lookup with the stops to ensure complete stop ids
-            df = self.stops.data[["stop_id"]].merge(
-                stop_times_df, on="stop_id", how="left"
-            )
-
         # otherwise, we know dask is available with any ArcGIS Pro installation
         else:
-            # get a dataframe with unique stop ids from the stops...necessary to ensure we have all stop id's
-            ddf_stops = self.stops._read_source_dask(usecols=["stop_id"])
 
             # read the stop times into a dask dataframe to get unique permutations of stop and trip id's
-            ddf_stop_times = self.stop_times._read_source_dask(
+            stop_times_df = self.stop_times._read_source_dask(
                 usecols=["stop_id", "trip_id"]
-            ).drop_duplicates()
+            ).drop_duplicates().compute()
 
-            # create crosstabs dask dataframe to go between stops and trips
-            ddf_crosstabs: dd.DataFrame = ddf_stops.merge(
-                ddf_stop_times, on="stop_id", how="left"
-            )
+        # ensure data types are consistent, string
+        for col in stop_times_df.columns:
 
-            # convert to a pandas dataframe
-            df = ddf_crosstabs.compute()
+            if stop_times_df[col].dtype == 'float':
+                stop_times_df[col] = stop_times_df[col].astype('Int64').astype('string')
+
+            else:
+                stop_times_df[col] = stop_times_df[col].astype('string')
+
+        # combine the stop times lookup with the stops to ensure complete stop_id's, even if means null trip_id's
+        df = self.stops.data[["stop_id"]].merge(
+            stop_times_df, on="stop_id", how="left"
+        )
 
         return df
 
