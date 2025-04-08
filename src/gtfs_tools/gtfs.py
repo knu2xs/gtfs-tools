@@ -165,14 +165,22 @@ class GtfsFile(object):
 
         # for each column in the source data, only add the column to dtype if present in source
         for col in self.file_columns:
+
+            # ensure string columns are encoded as such
             if col in self.string_columns:
                 dtype[col] = "string"
 
+            # ensure integer columns are correctly cast to int64 so can handle nulls
             elif col in self.integer_columns or col in self.boolean_columns:
                 dtype[col] = "Int64"
 
+            # ensure float columns are also encoded as such
             elif col in self.float_columns:
                 dtype[col] = "Float64"
+
+            # if an id column not explicitly cast above, ensure is a string
+            elif col.endswith('_id'):
+                dtype[col] = "string"
 
         return dtype
 
@@ -598,25 +606,68 @@ class GtfsShapes(GtfsFile):
     @cached_property
     def sedf(self) -> pd.DataFrame:
         """Spatially enabled data frame of the shapes data as polylines."""
-        if self.data.shape[0] > 0:
-            sedf = (
-                self.data.sort_values(["shape_id", "shape_pt_sequence"])
-                .loc[:, ["shape_id", "shape_pt_lon", "shape_pt_lat"]]
-                .groupby("shape_id")
-                .apply(lambda r: list(zip(r["shape_pt_lon"], r["shape_pt_lat"])))
-                .apply(
-                    lambda coords: Polyline(
-                        {"paths": [coords], "spatialReference": {"wkid": 4326}}
-                    )
-                )
-                .rename("SHAPE")
-                .to_frame()
-                .reset_index()
-                .spatial.set_geometry("SHAPE", inplace=False)
-            )
+        # if duckdb is available, use it to distill the table
+        if importlib.util.find_spec("duckdb") is not None:
 
+            import duckdb
+
+            # read the raw data into duckdb
+            shapes_ddb_raw = duckdb.read_csv(self.file_path,
+                                             dtype={"shape_id": "VARCHAR", "shape_pt_lon": "DOUBLE",
+                                                    "shape_pt_lat": "DOUBLE", "shape_pt_sequence": "INT64"})
+
+            # combine the cordinates into a single column
+            shapes_ddb_coords = duckdb.sql("""
+                SELECT shape_id, CONCAT('[', shape_pt_lon, ',' , shape_pt_lat, ']') AS coordinates 
+                FROM shapes_ddb_raw 
+                ORDER BY shape_id, shape_pt_sequence 
+            """)
+
+            # concatenate the coordinates into a sequence for each shape id (line)
+            shapes_ddb_arr = duckdb.sql("""
+                SELECT shape_id, GROUP_CONCAT(coordinates) AS coord_arr 
+                FROM shapes_ddb_coords 
+                GROUP BY shape_id
+            """)
+
+            # add the additional json defining the coordinates as a json geometry object
+            shapes_ddb_shp = duckdb.sql("""
+                SELECT shape_id, CONCAT('{"paths": [[', coord_arr , ']], "spatialReference" : {"wkid" : 4326}}') AS SHAPE 
+                FROM shapes_ddb_arr
+            """)
+
+            # convert to pandas data frame
+            sedf = shapes_ddb_shp.df()
+
+            # convert the geometry strings to geometry objects
+            sedf['SHAPE'] = sedf['SHAPE'].apply(Polyline)
+
+            # set the geometry so recognized as SeDF
+            sedf.spatial.set_geometry('SHAPE', inplace=True)
+
+        # if duckdb not available, use pandas
         else:
-            sedf = pd.DataFrame(columns=["shape_id", "SHAPE"])
+
+            # if there is data to work with
+            if self.data.shape[0] > 0:
+                sedf = (
+                    self.data.sort_values(["shape_id", "shape_pt_sequence"])
+                    .loc[:, ["shape_id", "shape_pt_lon", "shape_pt_lat"]]
+                    .groupby("shape_id")
+                    .apply(lambda r: list(zip(r["shape_pt_lon"], r["shape_pt_lat"])))
+                    .apply(
+                        lambda coords: Polyline(
+                            {"paths": [coords], "spatialReference": {"wkid": 4326}}
+                        )
+                    )
+                    .rename("SHAPE")
+                    .to_frame()
+                    .reset_index()
+                    .spatial.set_geometry("SHAPE", inplace=False)
+                )
+
+            else:
+                sedf = pd.DataFrame(columns=["shape_id", "SHAPE"])
 
         return sedf
 
@@ -1392,9 +1443,14 @@ class GtfsDataset(object):
             # build calendar from the inferred raw data
             calendar = GtfsCalendar(raw_df, parent=self)
 
+        elif self.infer_calendar and not self._calendar_dates_pth.exists():
+            raise FileNotFoundError(
+                "Cannot locate a calendar.txt or a calendar-dates.txt file in this GTFS dataset."
+            )
+
         else:
             raise FileNotFoundError(
-                "calendar.txt file does not appear to be included in this GTFS dataset."
+                "A calendar.txt file does not appear to be included in this GTFS dataset."
             )
 
         return calendar
@@ -1562,10 +1618,12 @@ class GtfsDataset(object):
             # import duckdb
             import duckdb
 
+            # create a duckdb table to read the data
+            stop_times_ddb = duckdb.read_csv(self.stop_times.file_path, dtype={'stop_id': 'VARCHAR', 'trip_id': 'VARCHAR'})
+
             # create the crosstabs lookup using duckdb to boil down the stop times table to just a stop to trip lookup
-            stop_times_df = duckdb.sql(
-                f"""SELECT DISTINCT stop_id, trip_id FROM read_csv('{self.stop_times.file_path}')"""
-            ).df()
+            # stop_times_df = duckdb.sql(f"SELECT DISTINCT stop_id, trip_id FROM stop_times_ddb").df()
+            stop_times_df = duckdb.sql(f"SELECT stop_id, trip_id FROM stop_times_ddb GROUP BY stop_id, trip_id").df()
 
         # otherwise, we know dask is available with any ArcGIS Pro installation
         else:
