@@ -165,7 +165,6 @@ class GtfsFile(object):
 
         # for each column in the source data, only add the column to dtype if present in source
         for col in self.file_columns:
-
             # ensure string columns are encoded as such
             if col in self.string_columns:
                 dtype[col] = "string"
@@ -179,7 +178,7 @@ class GtfsFile(object):
                 dtype[col] = "Float64"
 
             # if an id column not explicitly cast above, ensure is a string
-            elif col.endswith('_id'):
+            elif col.endswith("_id"):
                 dtype[col] = "string"
 
         return dtype
@@ -234,7 +233,14 @@ class GtfsFile(object):
             if not all_columns and df.columns.tolist() != self.use_columns:
                 df = df.loc[:, self.use_columns]
 
-        logging.info(f"Raw {self.file_path.stem} record count: {df.shape[0]:,}")
+        # handle if file path does not exist (possible if inferring calendar)
+        itm_nm = (
+            f"{self.__class__.__name__}"
+            if self.file_path is None
+            else self.file_path.stem
+        )
+
+        logging.info(f"Raw {itm_nm} record count: {df.shape[0]:,}")
 
         return df
 
@@ -608,46 +614,56 @@ class GtfsShapes(GtfsFile):
         """Spatially enabled data frame of the shapes data as polylines."""
         # if duckdb is available, use it to distill the table
         if importlib.util.find_spec("duckdb") is not None:
-
             import duckdb
 
             # read the raw data into duckdb
-            shapes_ddb_raw = duckdb.read_csv(self.file_path,
-                                             dtype={"shape_id": "VARCHAR", "shape_pt_lon": "DOUBLE",
-                                                    "shape_pt_lat": "DOUBLE", "shape_pt_sequence": "INT64"})
+            shapes_ddb_raw = duckdb.read_csv(
+                self.file_path,
+                dtype={
+                    "shape_id": "VARCHAR",
+                    "shape_pt_lon": "DOUBLE",
+                    "shape_pt_lat": "DOUBLE",
+                    "shape_pt_sequence": "INT64",
+                },
+            )
 
             # combine the cordinates into a single column
-            shapes_ddb_coords = duckdb.sql("""
+            shapes_ddb_coords = duckdb.sql(
+                """
                 SELECT shape_id, CONCAT('[', shape_pt_lon, ',' , shape_pt_lat, ']') AS coordinates 
                 FROM shapes_ddb_raw 
                 ORDER BY shape_id, shape_pt_sequence 
-            """)
+            """
+            )
 
             # concatenate the coordinates into a sequence for each shape id (line)
-            shapes_ddb_arr = duckdb.sql("""
+            shapes_ddb_arr = duckdb.sql(
+                """
                 SELECT shape_id, GROUP_CONCAT(coordinates) AS coord_arr 
                 FROM shapes_ddb_coords 
                 GROUP BY shape_id
-            """)
+            """
+            )
 
             # add the additional json defining the coordinates as a json geometry object
-            shapes_ddb_shp = duckdb.sql("""
+            shapes_ddb_shp = duckdb.sql(
+                """
                 SELECT shape_id, CONCAT('{"paths": [[', coord_arr , ']], "spatialReference" : {"wkid" : 4326}}') AS SHAPE 
                 FROM shapes_ddb_arr
-            """)
+            """
+            )
 
             # convert to pandas data frame
             sedf = shapes_ddb_shp.df()
 
             # convert the geometry strings to geometry objects
-            sedf['SHAPE'] = sedf['SHAPE'].apply(Polyline)
+            sedf["SHAPE"] = sedf["SHAPE"].apply(Polyline)
 
             # set the geometry so recognized as SeDF
-            sedf.spatial.set_geometry('SHAPE', inplace=True)
+            sedf.spatial.set_geometry("SHAPE", inplace=True)
 
         # if duckdb not available, use pandas
         else:
-
             # if there is data to work with
             if self.data.shape[0] > 0:
                 sedf = (
@@ -1399,13 +1415,16 @@ class GtfsDataset(object):
         # paths to child resources
         self._agency_pth = self.gtfs_folder / "agency.txt"
         self._calendar_pth = self.gtfs_folder / "calendar.txt"
-        self._calendar_dates_pth = self.gtfs_folder / "calendar-dates.txt"
+        self._calendar_dates_pth = self.gtfs_folder / "calendar_dates.txt"
         self._frequencies_pth = self.gtfs_folder / "frequencies.txt"
         self._routes_pth = self.gtfs_folder / "routes.txt"
         self._shapes_pth = self.gtfs_folder / "shapes.txt"
         self._stops_pth = self.gtfs_folder / "stops.txt"
         self._stop_times_pth = self.gtfs_folder / "stop_times.txt"
         self._trips_pth = self.gtfs_folder / "trips.txt"
+
+    def __str__(self):
+        return str(self.gtfs_folder)
 
     def __repr__(self):
         return f"GtfsDataset: {self.gtfs_folder}"
@@ -1619,33 +1638,36 @@ class GtfsDataset(object):
             import duckdb
 
             # create a duckdb table to read the data
-            stop_times_ddb = duckdb.read_csv(self.stop_times.file_path, dtype={'stop_id': 'VARCHAR', 'trip_id': 'VARCHAR'})
+            stop_times_ddb = duckdb.read_csv(
+                self.stop_times.file_path,
+                dtype={"stop_id": "VARCHAR", "trip_id": "VARCHAR"},
+            )
 
             # create the crosstabs lookup using duckdb to boil down the stop times table to just a stop to trip lookup
             # stop_times_df = duckdb.sql(f"SELECT DISTINCT stop_id, trip_id FROM stop_times_ddb").df()
-            stop_times_df = duckdb.sql(f"SELECT stop_id, trip_id FROM stop_times_ddb GROUP BY stop_id, trip_id").df()
+            stop_times_df = duckdb.sql(
+                f"SELECT stop_id, trip_id FROM stop_times_ddb GROUP BY stop_id, trip_id"
+            ).df()
 
         # otherwise, we know dask is available with any ArcGIS Pro installation
         else:
-
             # read the stop times into a dask dataframe to get unique permutations of stop and trip id's
-            stop_times_df = self.stop_times._read_source_dask(
-                usecols=["stop_id", "trip_id"]
-            ).drop_duplicates().compute()
+            stop_times_df = (
+                self.stop_times._read_source_dask(usecols=["stop_id", "trip_id"])
+                .drop_duplicates()
+                .compute()
+            )
 
         # ensure data types are consistent, string
         for col in stop_times_df.columns:
-
-            if stop_times_df[col].dtype == 'float':
-                stop_times_df[col] = stop_times_df[col].astype('Int64').astype('string')
+            if stop_times_df[col].dtype == "float":
+                stop_times_df[col] = stop_times_df[col].astype("Int64").astype("string")
 
             else:
-                stop_times_df[col] = stop_times_df[col].astype('string')
+                stop_times_df[col] = stop_times_df[col].astype("string")
 
         # combine the stop times lookup with the stops to ensure complete stop_id's, even if means null trip_id's
-        df = self.stops.data[["stop_id"]].merge(
-            stop_times_df, on="stop_id", how="left"
-        )
+        df = self.stops.data[["stop_id"]].merge(stop_times_df, on="stop_id", how="left")
 
         return df
 

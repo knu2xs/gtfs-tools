@@ -1,6 +1,7 @@
 import datetime
 import logging
 import math
+import re
 from pathlib import Path
 import shlex
 from typing import Optional
@@ -127,10 +128,26 @@ def get_calendar_from_calendar_dates(calendar_dates: pd.DataFrame) -> pd.DataFra
     # only use exception type 1, when they are open
     calendar_dates = calendar_dates[calendar_dates["exception_type"] == 1]
 
-    # cast the date column to a datetime object
-    calendar_dates["date"] = pd.to_datetime(
-        calendar_dates["date"].astype(str), format="%Y%m%d"
-    )
+    # if dates are not parsed
+    if calendar_dates["date"].dtype != "datetime64[ns]":
+        # make sure is a string to work with if not a date
+        calendar_dates["date"] = calendar_dates["date"].astype("string")
+
+        # get the first record to sniff
+        dt_str = calendar_dates["date"].iloc[0]
+
+        # if dashes, 2024-05-06, cast the date column to a datetime object
+        if re.match(r"\d{2,4}-\d{1,2}-\d{1,2}", dt_str):
+            calendar_dates["date"] = pd.to_datetime(
+                calendar_dates["date"].astype(str), format="%Y-%m-%d"
+            )
+
+        # if no dashes, 20240506, cast the date column to a datetime object
+        else:
+            # cast the date column to a datetime object
+            calendar_dates["date"] = pd.to_datetime(
+                calendar_dates["date"].astype(str), format="%Y%m%d"
+            )
 
     # get the day of the week from the datetime object
     calendar_dates["dow"] = calendar_dates["date"].dt.dayofweek
