@@ -814,7 +814,19 @@ class GtfsStops(GtfsFile):
                 on="service_id",
                 how="outer",
             )
-            .drop(columns=["service_id", "start_date", "end_date"])
+            .loc[
+                :,
+                [
+                    "stop_id",
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                    "sunday",
+                ],
+            ]
             .groupby("stop_id")
             .any()
             .astype("Int64")
