@@ -809,8 +809,8 @@ class GtfsStops(GtfsFile):
     def service_days(self):
         """Days of the week with service."""
         df_svc = (
-            self.parent._crosstab_stop_service.join(
-                self.parent.calendar.data.set_index("service_id"),
+            self.parent._crosstab_stop_service.merge(
+                self.parent.calendar.data,
                 on="service_id",
                 how="outer",
             )
