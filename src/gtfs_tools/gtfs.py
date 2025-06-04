@@ -746,7 +746,7 @@ class GtfsStops(GtfsFile):
             df["location_type"] = pd.Series(dtype=str)
 
         # apply a default location type if not populated
-        df["location_type"].fillna("0", inplace=True)
+        df["location_type"] = df["location_type"].fillna("0")
 
         # ensure wheelchair boarding column is included
         if "wheelchair_boarding" not in df.columns:
@@ -798,7 +798,7 @@ class GtfsStops(GtfsFile):
 
         # create geometry from the longitude (X) and latitude (Y) columns
         df["SHAPE"] = df[["stop_lon", "stop_lat"]].apply(
-            lambda r: Point({"x": r[0], "y": r[1], "spatialReference": {"wkid": 4326}}),
+            lambda r: Point({"x": r.iloc[0], "y": r.iloc[1], "spatialReference": {"wkid": 4326}}),
             axis=1,
         )
         df.spatial.set_geometry("SHAPE", inplace=True)
