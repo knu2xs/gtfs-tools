@@ -685,7 +685,20 @@ class GtfsShapes(GtfsFile):
             else:
                 sedf = pd.DataFrame(columns=["shape_id", "SHAPE"])
 
-        return sedf
+        # ensure all the data is valid
+        valid_fltr = sedf["SHAPE"].apply(lambda geom: geom.is_valid())
+
+        valid_df = sedf[valid_fltr]
+        invalid_df = sedf[~valid_fltr]
+
+        if invalid_df.shape[0] > 0:
+            invalid_shape_id_lst = list(invalid_df["shape_id"])
+            logging.warning(
+                f"{invalid_df.shape[0]:,} lines have invalid geometry and will not be included in the output. Invalid "
+                f"shape_id list: {invalid_shape_id_lst}."
+            )
+
+        return valid_df
 
 
 class GtfsStops(GtfsFile):
@@ -798,7 +811,9 @@ class GtfsStops(GtfsFile):
 
         # create geometry from the longitude (X) and latitude (Y) columns
         df["SHAPE"] = df[["stop_lon", "stop_lat"]].apply(
-            lambda r: Point({"x": r.iloc[0], "y": r.iloc[1], "spatialReference": {"wkid": 4326}}),
+            lambda r: Point(
+                {"x": r.iloc[0], "y": r.iloc[1], "spatialReference": {"wkid": 4326}}
+            ),
             axis=1,
         )
         df.spatial.set_geometry("SHAPE", inplace=True)
