@@ -1668,12 +1668,14 @@ class GtfsDataset(object):
             stop_times_ddb = duckdb.read_csv(
                 self.stop_times.file_path,
                 dtype={"stop_id": "VARCHAR", "trip_id": "VARCHAR"},
+                strict_mode=False,
+                # null_padding=True,
             )
 
             # create the crosstabs lookup using duckdb to boil down the stop times table to just a stop to trip lookup
             # stop_times_df = duckdb.sql(f"SELECT DISTINCT stop_id, trip_id FROM stop_times_ddb").df()
             stop_times_df = duckdb.sql(
-                f"SELECT stop_id, trip_id FROM stop_times_ddb GROUP BY stop_id, trip_id"
+                "SELECT stop_id, trip_id FROM stop_times_ddb GROUP BY stop_id, trip_id"
             ).df()
 
         # otherwise, we know dask is available with any ArcGIS Pro installation
