@@ -48,6 +48,12 @@ __all__ = [
 class GtfsFile(object):
     """
     Template object for child files in GTFS datasets.
+
+    Args:
+        source: Location where to find data to use.
+        all_columns: Whether desired to return all columns when reading data or not.
+        required_columns: List of columns required for reading data. If not set, the defaults will be used.
+        parent: Parent GTFS dataset object.
     """
 
     # variables to be set in children
@@ -65,13 +71,6 @@ class GtfsFile(object):
         required_columns: Optional[list[str]] = None,
         parent: Optional["GtfsDataset"] = None,
     ) -> None:
-        """
-        Args:
-            source: Location where to find data to use.
-            all_columns: Whether desired to return all columns when reading data or not.
-            required_columns: List of columns required for reading data. If not set, the defaults will be used.
-            parent: Parent GTFS dataset object.
-        """
         # save variables
         self.all_columns = all_columns
         self.parent = parent
@@ -140,8 +139,8 @@ class GtfsFile(object):
         """
         List of columns used to read the data from the file.
 
-        .. note::
-            Columns will *only* be returned if they are detected in the source data.
+        Note:
+            Columns will _only_ be returned if they are detected in the source data.
         """
         # ensure columns in _use_columns are in the required data
         delta_cols = [c for c in self.required_columns if c not in self._use_columns]
@@ -183,7 +182,7 @@ class GtfsFile(object):
 
         return dtype
 
-    def _read_source(self, all_columns: bool) -> pd.DataFrame():
+    def _read_source(self, all_columns: bool) -> pd.DataFrame:
         """Helper to read the CSV file."""
         # if the data frame is not already populated, read it from the source file.
         if self._df is None:
@@ -246,7 +245,7 @@ class GtfsFile(object):
 
     def _read_source_dask(
         self, all_columns: Optional[bool] = False, usecols: Optional[list[str]] = None
-    ) -> pd.DataFrame():
+    ) -> pd.DataFrame:
         """Helper to read the CSV file using dask."""
         # check to see if the file even exists
         if not self.file_path.exists():
@@ -427,7 +426,15 @@ class GtfsFrequencies(GtfsFile):
 
 
 class GtfsRoutes(GtfsFile):
-    """Routes GTFS file."""
+    """
+    Routes GTFS file.
+
+    Args:
+        source: Location where to find file to read.
+        all_columns: Whether desired to return all columns when reading data or not.
+        standardize_route_types: Whether to standardize route types from any potential European transit route
+            types to standard GTFS route types.
+    """
 
     required_columns = ["route_id", "route_type"]
     string_columns = ["route_id", "agency_id", "route_type"]
@@ -440,13 +447,6 @@ class GtfsRoutes(GtfsFile):
         standardize_route_types: Optional[bool] = False,
         parent: Optional["GtfsDataset"] = None,
     ) -> None:
-        """
-        Args:
-            source: Location where to find file to read.
-            all_columns: Whether desired to return all columns when reading data or not.
-            standardize_route_types: Whether to standardize route types from any potential European transit route
-                types to standard GTFS route types.
-        """
         super().__init__(source, all_columns=all_columns, parent=parent)
         self.standardize_route_types = standardize_route_types
 
@@ -723,7 +723,7 @@ class GtfsStops(GtfsFile):
             )
 
     @cached_property
-    def _valid_and_invalid_data(self) -> pd.DataFrame():
+    def _valid_and_invalid_data(self) -> pd.DataFrame:
         """Helper to read and run data through validation."""
         # get the data frame
         df = self._read_source(self.all_columns)
@@ -1004,12 +1004,11 @@ class GtfsStops(GtfsFile):
         Headway descriptive statistics for each stop, useful for understanding headway as a quality-of-service
         metric for each stop.
 
-        .. note::
-
-            If wanting to access a specific statistic, it is *much* more efficient to directly calculate the
-            specific statistic from ``stop_times``. For instance, if you want the average (mean) headway for each
-            stop, it is much more efficient to use ``gtfs.stop_times.headway.groupby("stop_id").mean()`` than
-            to use ``gtfs.stops.headway_stats["mean"]``.
+        Note:
+            If wanting to access a specific statistic, it is _much_ more efficient to directly calculate the
+            specific statistic from `stop_times`. For instance, if you want the average (mean) headway for each
+            stop, it is much more efficient to use `gtfs.stop_times.headway.groupby("stop_id").mean()` than
+            to use `gtfs.stops.headway_stats["mean"]`.
 
         """
         hw_stats_df = self.parent.stop_times.headway_stats
@@ -1040,7 +1039,14 @@ class GtfsStops(GtfsFile):
 
 
 class GtfsStopTimes(GtfsFile):
-    """Stop times GTFS file."""
+    """
+    Stop times GTFS file.
+    
+    Args:
+        source: Location where to find file to read.
+        all_columns: Whether desired to return all columns when reading data or not.
+        infer_missing: Whether to infer missing arrival and departure values when reading data or not.
+    """
 
     required_columns = [
         "trip_id",
@@ -1059,12 +1065,6 @@ class GtfsStopTimes(GtfsFile):
         infer_missing: Optional[bool] = False,
         parent: Optional["GtfsDataset"] = None,
     ) -> None:
-        """
-        Args:
-            source: Location where to find file to read.
-            all_columns: Whether desired to return all columns when reading data or not.
-            infer_missing: Whether to infer missing arrival and departure values when reading data or not.
-        """
         super().__init__(source, all_columns=all_columns, parent=parent)
         self.infer_missing = infer_missing
 
@@ -1095,27 +1095,26 @@ class GtfsStopTimes(GtfsFile):
     @cached_property
     def headway(self) -> pd.DataFrame:
         """
-        Data frame with ``stop_id`` and ``headway`` for each stop. This is extremely useful for deriving descriptive
+        Data frame with `stop_id` and `headway` for each stop. This is extremely useful for deriving descriptive
         statistics about each stop.
 
-        .. code-block:: python
+        ```python
+        from pathlib import Path
 
-            from pathlib import Path
+        from gtfs_tools.gtfs import GTFS
 
-            from gtfs_tools.gtfs import GTFS
+        # path to data
+        gtfs_dir = Path("C:/data/gtfs/gtfs_agency_dataset")
 
-            # path to data
-            gtfs_dir = Path("C:/data/gtfs/gtfs_agency_dataset")
+        # create GTFS object instance
+        gtfs = GTFS(gtfs_dir)
 
-            # create GTFS object instance
-            gtfs = GTFS(gtfs_dir)
+        # get headway values for stops
+        headway_df = gtfs.stops.headway
 
-            # get headway values for stops
-            headway_df = gtfs.stops.headway
-
-            # calculate headway descriptive statistics for each stop
-            headway_stats = headway_df.groupby("stop_id").describe()
-
+        # calculate headway descriptive statistics for each stop
+        headway_stats = headway_df.groupby("stop_id").describe()
+        ```
         """
         headway_df = calculate_headway(self.data)
 
@@ -1324,12 +1323,13 @@ class GtfsTrips(GtfsFile):
     def temporal_windows(self) -> pd.DataFrame:
         """
         Get status of trip providing service in the following temporal windows:
-        * Early Morning: 3am to 6am
-        * Morning Peak: 6am to 9am
-        * Midday: 9am to 3pm
-        * Afternoon Peak: 3pm to 6pm
-        * Evening: 3pm to 10pm
-        * Late Night: 10pm to 3am
+
+        - Early Morning: 3am to 6am
+        - Morning Peak: 6am to 9am
+        - Midday: 9am to 3pm
+        - Afternoon Peak: 3pm to 6pm
+        - Evening: 3pm to 10pm
+        - Late Night: 10pm to 3am
         """
         df = (
             self.early_morning.join(self.morning_peak)
@@ -1364,25 +1364,36 @@ class GtfsDataset(object):
     Object with ingestion and processing capabilities for working with a GTFS dataset, the starting point for working
     with GTFS data.
 
-    .. code-block:: python
+    Args:
+        gtfs_path: Directory containing GTFS data.
+        infer_stop_times: Whether to infer stop times, missing arrival and departure times, when only the beginning
+            and ending times are provided.
+        infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
+        required_files: List of files required for the GTFS dataset. By default, these include `[ "agency.txt",
+            "calendar.txt", "routes.txt", "shapes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]`
+        standardize_route_types: Whether to standardize route types from any potential European transit route
+            types to standard GTFS route types.
 
-        import pathlib as Path
-        from gtfs_tools.gtfs import GtfsDataset
+    ```python
+    import pathlib as Path
 
-        # path to directory with a gtfs dataset
-        gtfs_pth = Path(r"D:\\data\\agency_gtfs")
+    from gtfs_tools.gtfs import GtfsDataset
 
-        # create the GtfsDataset instance
-        gtfs = GtfsDataset(gtfs_pth)
+    # path to directory with a gtfs dataset
+    gtfs_pth = Path("D:/data/agency_gtfs")
 
-        # ensure all required files are included
-        gtfs.validate()
+    # create the GtfsDataset instance
+    gtfs = GtfsDataset(gtfs_pth)
 
-        # get a spatially enabled dataframe of all stops with the agency added
-        stops_df = gtfs.stops.sedf_with_agency
+    # ensure all required files are included
+    gtfs.validate()
 
-        # get a spatially enabled dataframe of all routes
-        routes_df = gtfs.routes.sedf
+    # get a spatially enabled dataframe of all stops
+    stops_df = gtfs.stops.sedf
+
+    # get a spatially enabled dataframe of all routes
+    routes_df = gtfs.routes.sedf
+    ```
     """
 
     def __init__(
@@ -1393,16 +1404,6 @@ class GtfsDataset(object):
         required_files: Optional[list[str]] = None,
         standardize_route_types: Optional[bool] = False,
     ) -> None:
-        """
-        Args:
-            gtfs_path: Directory containing GTFS data.
-            infer_stop_times: Whether to infer stop times, missing arrival and departure times.
-            infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
-            required_files: List of files required for the GTFS dataset. By default, these include ``[ "agency.txt",
-                "calendar.txt", "routes.txt", "shapes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]``
-            standardize_route_types: Whether to standardize route types from any potential European transit route
-                types to standard GTFS route types.
-        """
         # ensure the directory is a path
         if isinstance(gtfs_path, str):
             gtfs_path = Path(gtfs_path)
@@ -1467,10 +1468,9 @@ class GtfsDataset(object):
         """
         Calendar data from GTFS file.
 
-        .. note::
-
-            If the ``calendar.txt`` file is not present, by default, this will be inferred from the
-            ``calendar-dates.txt`` file.
+        Note:
+            If the `calendar.txt` file is not present, by default, this will be inferred from the
+            `calendar-dates.txt` file.
 
         """
         # if calendar.txt is present in this dataset
@@ -1536,9 +1536,8 @@ class GtfsDataset(object):
         """
         Stop times data from GTFS file.
 
-        .. note::
-
-            If ``arrival_times`` and ``departure_times`` are only provided for the beginning and end of a trip,
+        Note:
+            If `arrival_times` and `departure_times` are only provided for the beginning and end of a trip,
             intermediate stop times will be inferred by evenly distributing the intervals between the provided
             starting and ending times for the route.
 
@@ -1565,7 +1564,7 @@ class GtfsDataset(object):
         standardize_route_types: Optional[bool] = False,
     ) -> "GtfsDataset":
         """
-        Create a ``GtfsDataset`` from a zip file.e
+        Create a [GtfsDataset][gtfs_tools.gtfs.GtfsDatset] from a zip file.
 
         Args:
             zip_path: Path to the zip file.
@@ -1573,8 +1572,8 @@ class GtfsDataset(object):
                 to the temp directory.
             infer_stop_times: Whether to infer stop times, missing arrival and departure times.
             infer_calendar: Whether to infer calendar from calendar dates if calendar.txt is missing.
-            required_files: List of files required for the GTFS dataset. By default, these include ``[ "agency.txt",
-                "calendar.txt", "routes.txt", "shapes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]``
+            required_files: List of files required for the GTFS dataset. By default, these include `["agency.txt",
+                "calendar.txt", "routes.txt", "shapes.txt", "stops.txt",  "stop_times.txt", "trips.txt"]`
             standardize_route_types: Whether to standardize route types from any potential European transit route
                 types to standard GTFS route types.
         """
@@ -1636,12 +1635,12 @@ class GtfsDataset(object):
 
     def validate(self, calendar_or_calendar_dates: Optional[bool] = True) -> bool:
         """
-        Ensure all necessary files are present. Required files are determined by the ``required_files`` construction
+        Ensure all necessary files are present. Required files are determined by the `required_files` construction
         parameter.
 
         Args:
-            calendar_or_calendar_dates: When scanning for files, accept the dataset if ``calendar_dates.txt`` is
-                present, even in the absence of ``calendar.txt``.
+            calendar_or_calendar_dates: When scanning for files, accept the dataset if `calendar_dates.txt` is
+                present, even in the absence of `calendar.txt`.
         """
         valid = validate_required_files(
             self.gtfs_folder,
@@ -1653,7 +1652,7 @@ class GtfsDataset(object):
 
     @cached_property
     def valid(self):
-        """Alias for ``validate`` accepting default parameters."""
+        """Alias for `validate` accepting default parameters."""
         return self.validate()
 
     @cached_property
@@ -1702,16 +1701,20 @@ class GtfsDataset(object):
 
     @cached_property
     def _crosstab_trip_route(self) -> pd.DataFrame:
-        """Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
-        to routes."""
+        """
+        Data frame with crosstabs lookup between trips and routes. This is useful when attempting to associate trips
+        to routes.
+        """
         df = self.trips.data[["trip_id", "route_id"]]
         df = df.drop_duplicates().reset_index(drop=True)
         return df
 
     @cached_property
     def _crosstab_trip_service(self) -> pd.DataFrame:
-        """Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
-        trips to calendar."""
+        """
+        Data frame with crosstab lookup between trips and services. This is useful when attempting to associate
+        trips to calendar.
+        """
         df = self.trips.data[["trip_id", "service_id"]]
         df = df.drop_duplicates().reset_index(drop=True)
         return df
@@ -1749,8 +1752,7 @@ class GtfsDataset(object):
         Data frame with crosstab lookup between stops and service_id. This is useful when attempting to associate
         between stops and calendar.
 
-        .. note::
-
+        Note:
             This will include *all* stops, even if there is not an associated trip.
         """
         df = self._crosstab_stop_trip.merge(
@@ -1828,11 +1830,18 @@ class GtfsDataset(object):
         )
 
         return crosstabs_df
+    
+    @cached_property
+    def lookup_route_agency(self)-> pd.DataFrame:
+        """
+        Crosstabular lookup from routes to agency.
+        """
+        return self._crosstab_route_agency
 
     @cached_property
     def lookup_stop_route(self) -> pd.DataFrame:
         """
-        Crosstabular lookup from stops to routes, populating ``route_id`` by first looking up parent values
+        Crosstabular lookup from stops to routes, populating `route_id` by first looking up parent values
         from children, and then attempting to populate any remaining missing values from parents.
         """
         crosstabs_df = (

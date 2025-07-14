@@ -1,4 +1,0 @@
-service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
-AFA23GEN-1038-Sunday-00,0,0,0,0,0,0,1,20231217,20240616
-AFA23GEN-1039-Saturday-00,0,0,0,0,0,1,0,20231223,20240622
-AFA23GEN-1092-Weekday-00_C45,1,1,1,1,1,0,0,20231218,20240621

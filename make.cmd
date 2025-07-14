@@ -41,9 +41,13 @@ GOTO %1
     CALL conda run -p %CONDA_DIR% python src/make_data.py
     GOTO end
 
-:: Make documentation using Sphinx!
+:: Make documentation using MkDocs!
 :docs
-    CALL conda run -p %CONDA_DIR% sphinx-build -a -b html ./docsrc ./docs
+    CALL conda run -p "%CONDA_DIR%" mkdocs build -f ./docsrc/mkdocs.yml
+    GOTO end
+
+:docserve
+    CALL conda run -p "%CONDA_DIR%" mkdocs serve -f ./docsrc/mkdocs.yml
     GOTO end
 
 :: Build the local environment from the environment file
